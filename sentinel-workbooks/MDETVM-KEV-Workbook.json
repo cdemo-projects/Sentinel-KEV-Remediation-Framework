@@ -31,7 +31,7 @@
         {
           "type": 1,
           "content": {
-            "json": "# CISA KEV to MDVM Findings Correlation\n\nCorrelates CISA's [Known Exploited Vulnerabilities (KEV) catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) — CVEs confirmed to be actively exploited in the wild — against live Microsoft Defender Vulnerability Management (MDVM) findings from every onboarded device in the tenant.\n\nUse this workbook to:\n- See exactly **which KEV CVEs are present on which devices right now**, with the CVE name, affected software, CVSS score, and CISA-mandated remediation due date.\n- Prioritize patching by **ransomware association** (CVEs CISA flags as used in known ransomware campaigns) and by **BOD 22-01 due date** (Past Due / Due < 14d).\n- Identify the **most exposed devices** and the **software products driving the most KEV exposure**, so remediation effort lands where it removes the most risk.\n\n**Data pipeline:** MDE agent → Microsoft Defender Vulnerability Management API → Logic App (`MDETVM`, daily 02:00 UTC, paginated via `@odata.nextLink`) → Data Collection Rule → `MDETVM_CL` (Log Analytics). Native MDVM `firstSeenTimestamp` and `lastSeenTimestamp` are preserved alongside ingestion `TimeGenerated`."
+            "json": "# CISA KEV to MDVM Findings Correlation\n\nCorrelates CISA's [Known Exploited Vulnerabilities (KEV) catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) \u00e2\u20ac\u201d CVEs confirmed to be actively exploited in the wild \u00e2\u20ac\u201d against live Microsoft Defender Vulnerability Management (MDVM) findings from every onboarded device in the tenant.\n\nUse this workbook to:\n- See exactly **which KEV CVEs are present on which devices right now**, with the CVE name, affected software, CVSS score, and CISA-mandated remediation due date.\n- Prioritize patching by **ransomware association** (CVEs CISA flags as used in known ransomware campaigns) and by **BOD 22-01 due date** (Past Due / Due < 14d).\n- Identify the **most exposed devices** and the **software products driving the most KEV exposure**, so remediation effort lands where it removes the most risk.\n\n**Data pipeline:** MDE agent \u00e2\u2020\u2019 Microsoft Defender Vulnerability Management API \u00e2\u2020\u2019 Logic App (`MDETVM`, daily 02:00 UTC, paginated via `@odata.nextLink`) \u00e2\u2020\u2019 Data Collection Rule \u00e2\u2020\u2019 `MDETVM_CL` (Log Analytics). Native MDVM `firstSeenTimestamp` and `lastSeenTimestamp` are preserved alongside ingestion `TimeGenerated`."
           }
         },
         {
@@ -46,6 +46,15 @@
                 "linkTarget": "parameter",
                 "linkLabel": "KEV Exposure",
                 "subTarget": "kev",
+                "preText": "",
+                "style": "link"
+              },
+              {
+                "id": "cve-tab",
+                "cellValue": "tab",
+                "linkTarget": "parameter",
+                "linkLabel": "All CVEs",
+                "subTarget": "cve",
                 "preText": "",
                 "style": "link"
               }
@@ -322,6 +331,109 @@
           },
           "customWidth": "50",
           "name": "kev-topsoftware"
+        },
+        {
+          "type": 1,
+          "content": {
+            "json": "## All CVE Exposure\n\nAll vulnerabilities from MDETVM_CL across every device \u2014 not filtered to CISA KEVs."
+          },
+          "conditionalVisibility": {
+            "parameterName": "tab",
+            "comparison": "isEqualTo",
+            "value": "cve"
+          },
+          "name": "cve-header"
+        },
+        {
+          "type": 3,
+          "content": {
+            "version": "KqlItem/1.0",
+            "query": "let latestPerDevice = MDETVM_CL\n| summarize LatestTime = max(TimeGenerated) by deviceName;\nMDETVM_CL\n| join kind=inner latestPerDevice on deviceName\n| where TimeGenerated == LatestTime\n| summarize CVECount=dcount(cveId), CriticalCount=dcountif(cveId, vulnerabilitySeverityLevel == \"Critical\"), HighCount=dcountif(cveId, vulnerabilitySeverityLevel == \"High\"), MediumCount=dcountif(cveId, vulnerabilitySeverityLevel == \"Medium\"), LowCount=dcountif(cveId, vulnerabilitySeverityLevel == \"Low\") by deviceName\n| sort by CVECount desc",
+            "size": 0,
+            "title": "CVE Count by Device",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "table",
+            "gridSettings": {
+              "sortBy": [
+                {
+                  "itemKey": "CVECount",
+                  "sortOrder": 2
+                }
+              ]
+            }
+          },
+          "conditionalVisibility": {
+            "parameterName": "tab",
+            "comparison": "isEqualTo",
+            "value": "cve"
+          },
+          "name": "cve-device-table"
+        },
+        {
+          "type": 3,
+          "content": {
+            "version": "KqlItem/1.0",
+            "query": "let latestPerDevice = MDETVM_CL\n| summarize LatestTime = max(TimeGenerated) by deviceName;\nMDETVM_CL\n| join kind=inner latestPerDevice on deviceName\n| where TimeGenerated == LatestTime\n| summarize CVECount=dcount(cveId) by vulnerabilitySeverityLevel\n| sort by CVECount desc",
+            "size": 2,
+            "title": "CVEs by Severity",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "piechart"
+          },
+          "conditionalVisibility": {
+            "parameterName": "tab",
+            "comparison": "isEqualTo",
+            "value": "cve"
+          },
+          "customWidth": "50",
+          "name": "cve-severity-chart"
+        },
+        {
+          "type": 3,
+          "content": {
+            "version": "KqlItem/1.0",
+            "query": "let latestPerDevice = MDETVM_CL\n| summarize LatestTime = max(TimeGenerated) by deviceName;\nMDETVM_CL\n| join kind=inner latestPerDevice on deviceName\n| where TimeGenerated == LatestTime\n| summarize CVECount=dcount(cveId), Devices=dcount(deviceName) by softwareName, softwareVendor\n| sort by CVECount desc\n| take 20",
+            "size": 0,
+            "title": "Top 20 Software by CVE Count",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "table"
+          },
+          "conditionalVisibility": {
+            "parameterName": "tab",
+            "comparison": "isEqualTo",
+            "value": "cve"
+          },
+          "customWidth": "50",
+          "name": "cve-software-table"
+        },
+        {
+          "type": 3,
+          "content": {
+            "version": "KqlItem/1.0",
+            "query": "let latestPerDevice = MDETVM_CL\n| summarize LatestTime = max(TimeGenerated) by deviceName;\nMDETVM_CL\n| join kind=inner latestPerDevice on deviceName\n| where TimeGenerated == LatestTime\n| project cveId, deviceName, softwareName, softwareVendor, vulnerabilitySeverityLevel, cvssV3=cvssV3_d, recommendedSecurityUpdateId, publicExploit=publicExploit_b, exploitTypes=exploitTypes_s\n| sort by cvssV3 desc, vulnerabilitySeverityLevel asc",
+            "size": 0,
+            "title": "All CVE Findings (Latest Snapshot)",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "table",
+            "gridSettings": {
+              "filter": true,
+              "sortBy": [
+                {
+                  "itemKey": "cvssV3",
+                  "sortOrder": 2
+                }
+              ]
+            }
+          },
+          "conditionalVisibility": {
+            "parameterName": "tab",
+            "comparison": "isEqualTo",
+            "value": "cve"
+          },
+          "name": "cve-findings-table"
         }
       ],
       "fromTemplateId": "mdetvm-kev-correlation-workbook",
