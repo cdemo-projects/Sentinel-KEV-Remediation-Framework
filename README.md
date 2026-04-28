@@ -119,6 +119,35 @@ az deployment group create -g <rg> `
   --parameters WorkspaceName=<ws> PlaybookResourceId=<logic-app-resource-id>
 ```
 
+### Trigger the first data pull
+
+The MDETVM Logic App runs daily at **02:00 UTC**. To pull data immediately after deployment:
+
+```powershell
+# Manual run via CLI
+az logic workflow trigger run `
+  -g <rg> --name MDETVM --trigger-name Recurrence
+```
+
+Or in the Portal: open the **MDETVM** Logic App → **Run Trigger** → **Recurrence**.
+
+First run typically takes 5–20 minutes depending on environment size. Watch the run history for failures (HTTP 403 = permissions issue, re-run `Assign-MDVMPermissions.ps1`).
+
+### Verify data landed in `MDETVM_CL`
+
+Wait 10–15 minutes after the first successful run, then run this in **Sentinel → Logs**:
+
+```kql
+MDETVM_CL
+| summarize
+    TotalRecords = count(),
+    Devices      = dcount(deviceName),
+    UniqueCVEs   = dcount(cveId),
+    MostRecent   = max(TimeGenerated)
+```
+
+Expect `Devices > 0` and `UniqueCVEs > 0`. If the table doesn't exist, the Logic App hasn't completed a successful run yet.
+
 > **Intune baseline:** If the tenant doesn't have Intune update rings or MDM enrollment configured, see [Intune-KEV-Starter-Policy.md](kev-remediation/Intune-KEV-Starter-Policy.md).
 
 ---
