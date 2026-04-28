@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "title": "KEV-Exceptions Watchlist",
+    "description": "Sentinel watchlist for managing approved KEV exceptions. The CISA KEV analytics rule left-anti-joins against this watchlist so matching CVE+device combos do not generate incidents. Each row requires justification, approver, and expiration date. Expired rows automatically re-alert."
+  },
+  "parameters": {
+    "workspace": { "type": "String" }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/watchlists",
+      "apiVersion": "2023-12-01-preview",
+      "name": "[concat(parameters('workspace'), '/Microsoft.SecurityInsights/KEV-Exceptions')]",
+      "properties": {
+        "displayName": "CISA KEV Exceptions",
+        "source": "KEV-Exceptions.csv",
+        "provider": "Microsoft",
+        "description": "Governed exceptions for CISA KEV + MDVM correlation. Matching CVE+device pairs will NOT generate Sentinel incidents until ExpirationDate has passed. Set ExpirationDate far in the future for permanent risk acceptance (e.g., compensating control in place).",
+        "itemsSearchKey": "ExceptionKey",
+        "contentType": "text/csv",
+        "numberOfLinesToSkip": 0,
+        "rawContent": "ExceptionKey,DeviceName,CveId,Justification,Reason,ApprovedBy,ApprovedDate,ExpirationDate,TicketReference\nEXAMPLE_cdemo_CVE-2025-0411,cdemo,CVE-2025-0411,Lab VM running intentionally outdated 7-Zip for demo,RiskAccepted,christian,2026-04-17,2027-04-17,LAB-001"
+      }
+    }
+  ]
+}

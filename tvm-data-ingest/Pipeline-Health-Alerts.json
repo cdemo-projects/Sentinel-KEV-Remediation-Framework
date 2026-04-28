@@ -1,0 +1,82 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "title": "MDETVM Pipeline Health Alerts",
+    "description": "Two Sentinel scheduled analytics rules monitoring the MDETVM -> MDETVM_CL ingestion pipeline. Creates incidents if: (1) MDETVM Logic App has no successful run in 26h, (2) MDETVM_CL ingestion drops >50% day-over-day. The original third rule (Quiet KEV) was removed because the KEV correlation rule no longer creates incidents \u2014 MDVM's built-in dashboard already surfaces KEV-tagged CVEs."
+  },
+  "parameters": {
+    "workspace": { "type": "String" }
+  },
+  "resources": [
+    {
+      "id": "[concat(resourceId('Microsoft.OperationalInsights/workspaces/providers', parameters('workspace'), 'Microsoft.SecurityInsights'),'/alertRules/a1b2c3d4-1111-1111-1111-111111111111')]",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/a1b2c3d4-1111-1111-1111-111111111111')]",
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "kind": "Scheduled",
+      "apiVersion": "2023-12-01-preview",
+      "properties": {
+        "displayName": "MDETVM Pipeline Health - Logic App not running",
+        "description": "Fires if MDETVM_CL has received no new rows in the last 26 hours (Logic App is expected to run daily at 02:00 UTC and ingest hundreds of rows).",
+        "severity": "High",
+        "enabled": true,
+        "query": "let LastIngestion = union isfuzzy=true (MDETVM_CL | summarize LastSeen = max(TimeGenerated)), (datatable(LastSeen:datetime)[datetime(1970-01-01)]) | summarize LastSeen = max(LastSeen);\nLastIngestion\n| where LastSeen < ago(26h)\n| extend HoursSinceLastIngestion = datetime_diff('hour', now(), LastSeen)\n| project LastSeen, HoursSinceLastIngestion",
+        "queryFrequency": "PT6H",
+        "queryPeriod": "P1D",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT6H",
+        "suppressionEnabled": true,
+        "tactics": [ "Impact" ],
+        "incidentConfiguration": { "createIncident": true, "groupingConfiguration": { "enabled": true, "reopenClosedIncident": false, "lookbackDuration": "P1D", "matchingMethod": "AllEntities" } },
+        "eventGroupingSettings": { "aggregationKind": "SingleAlert" }
+      }
+    },
+    {
+      "id": "[concat(resourceId('Microsoft.OperationalInsights/workspaces/providers', parameters('workspace'), 'Microsoft.SecurityInsights'),'/alertRules/a1b2c3d4-2222-2222-2222-222222222222')]",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/a1b2c3d4-2222-2222-2222-222222222222')]",
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "kind": "Scheduled",
+      "apiVersion": "2023-12-01-preview",
+      "properties": {
+        "displayName": "MDETVM Pipeline Health - Ingestion volume drop",
+        "description": "Fires if today's MDETVM_CL row count is less than 50% of the trailing 7-day average. Indicates the MDE Advanced Hunting query returned far fewer results than expected (often a permissions or API issue).",
+        "severity": "Medium",
+        "enabled": true,
+        "query": "let Today = union isfuzzy=true (MDETVM_CL | where TimeGenerated > ago(1d) | summarize TodayRows = count()), (datatable(TodayRows:long)[long(0)]) | summarize TodayRows = sum(TodayRows);\nlet Baseline = union isfuzzy=true (MDETVM_CL | where TimeGenerated between (ago(8d) .. ago(1d)) | summarize Rows7d = count()), (datatable(Rows7d:long)[long(0)]) | summarize Rows7d = sum(Rows7d) | extend BaselineAvg = Rows7d / 7.0;\nToday\n| extend BaselineAvg = toscalar(Baseline | project BaselineAvg)\n| where BaselineAvg > 10\n| where TodayRows < (BaselineAvg * 0.5)\n| extend DropPercent = round(100.0 * (1.0 - (TodayRows * 1.0 / BaselineAvg)), 1)\n| project TodayRows, BaselineAvg, DropPercent",
+        "queryFrequency": "PT6H",
+        "queryPeriod": "P8D",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT12H",
+        "suppressionEnabled": true,
+        "tactics": [ "Impact" ],
+        "incidentConfiguration": { "createIncident": true, "groupingConfiguration": { "enabled": true, "reopenClosedIncident": false, "lookbackDuration": "P1D", "matchingMethod": "AllEntities" } },
+        "eventGroupingSettings": { "aggregationKind": "SingleAlert" }
+      }
+    },
+    {
+      "id": "[concat(resourceId('Microsoft.OperationalInsights/workspaces/providers', parameters('workspace'), 'Microsoft.SecurityInsights'),'/alertRules/a1b2c3d4-3333-3333-3333-333333333333')]",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/a1b2c3d4-3333-3333-3333-333333333333')]",
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "kind": "Scheduled",
+      "apiVersion": "2023-12-01-preview",
+      "properties": {
+        "displayName": "MDETVM Pipeline Health - Quiet KEV (DISABLED - rule no longer creates incidents)",
+        "description": "DISABLED BY DESIGN. The CISA KEV correlation analytics rule no longer creates incidents (MDVM already surfaces KEV CVEs in its built-in dashboard), so 'zero KEV alerts' is permanently true and not a useful health signal.",
+        "severity": "Informational",
+        "enabled": false,
+        "query": "let RecentIngestion = union isfuzzy=true (MDETVM_CL | where TimeGenerated > ago(1d) | summarize Rows = count()), (datatable(Rows:long)[long(0)]) | summarize Rows = sum(Rows);\nlet RecentKEVAlerts = union isfuzzy=true (SecurityAlert | where TimeGenerated > ago(3d) | where AlertName has 'KEV' | summarize KEVAlerts = count()), (datatable(KEVAlerts:long)[long(0)]) | summarize KEVAlerts = sum(KEVAlerts);\nRecentIngestion\n| extend KEVAlerts = toscalar(RecentKEVAlerts | project KEVAlerts)\n| where Rows > 0 and KEVAlerts == 0\n| project Rows, KEVAlerts",
+        "queryFrequency": "P1D",
+        "queryPeriod": "P3D",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "P1D",
+        "suppressionEnabled": true,
+        "tactics": [ "Impact" ],
+        "incidentConfiguration": { "createIncident": false, "groupingConfiguration": { "enabled": true, "reopenClosedIncident": false, "lookbackDuration": "P3D", "matchingMethod": "AllEntities" } },
+        "eventGroupingSettings": { "aggregationKind": "SingleAlert" }
+      }
+    }
+  ]
+}

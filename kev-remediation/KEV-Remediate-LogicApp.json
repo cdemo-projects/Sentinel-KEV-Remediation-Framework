@@ -1,0 +1,1512 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "title": "KEV-Remediate - Automated KEV Remediation via WUfB + Intune",
+    "description": "Sentinel playbook (incident-triggered). Automates remediation of CISA KEVs via WUfB expedited deployment (Windows KBs) or Intune on-demand remediation (third-party).",
+    "prerequisites": [
+      "Grant the Logic App MI: Microsoft Sentinel Responder on the workspace",
+      "Grant the Logic App MI: WindowsUpdates.ReadWrite.All (Graph API)",
+      "Grant the Logic App MI: Device.Read.All (Graph API)",
+      "Grant the Logic App MI: DeviceManagementManagedDevices.Read.All (Graph API)",
+      "Grant the Logic App MI: DeviceManagementManagedDevices.PrivilegedOperations.All (Graph API)",
+      "Grant the Logic App MI: DeviceManagementScripts.ReadWrite.All (Graph API)",
+      "Grant the Logic App MI: Mail.Send (Graph API)",
+      "Assign Entra role: Windows Update Deployment Administrator to the Logic App MI"
+    ],
+    "support": {
+      "tier": "community"
+    },
+    "author": {
+      "name": "cdemo-projects"
+    }
+  },
+  "parameters": {
+    "PlaybookName": {
+      "defaultValue": "KEV-Remediate",
+      "type": "string"
+    },
+    "WorkspaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Log Analytics workspace with Sentinel enabled."
+      }
+    },
+    "WorkspaceCustomerId": {
+      "type": "string",
+      "metadata": {
+        "description": "Customer ID (GUID) of the Log Analytics workspace."
+      }
+    },
+    "WorkspaceResourceGroup": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().name]"
+    },
+    "TeamsWebhookUrl": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional: Teams Incoming Webhook URL."
+      }
+    },
+    "DaysUntilForcedReboot": {
+      "type": "int",
+      "defaultValue": 2
+    },
+    "MdeApiBase": {
+      "type": "string",
+      "defaultValue": "https://api.securitycenter.microsoft.com",
+      "allowedValues": [
+        "https://api.securitycenter.microsoft.com",
+        "https://api-gcc.securitycenter.microsoft.us",
+        "https://api-gov.securitycenter.microsoft.us"
+      ]
+    },
+    "GraphApiBase": {
+      "type": "string",
+      "defaultValue": "https://graph.microsoft.com",
+      "allowedValues": [
+        "https://graph.microsoft.com",
+        "https://graph.microsoft.us"
+      ]
+    },
+    "NotificationEmail": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Email address for remediation notifications."
+      }
+    },
+    "VerificationDelayMinutes": {
+      "type": "int",
+      "defaultValue": 120
+    },
+    "VerificationMaxAttempts": {
+      "type": "int",
+      "defaultValue": 6
+    }
+  },
+  "variables": {
+    "sentinelConnectionName": "azuresentinel",
+    "subscriptionId": "[subscription().subscriptionId]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/connections",
+      "apiVersion": "2016-06-01",
+      "name": "[variables('sentinelConnectionName')]",
+      "location": "[resourceGroup().location]",
+      "kind": "V1",
+      "properties": {
+        "displayName": "[variables('sentinelConnectionName')]",
+        "customParameterValues": {},
+        "parameterValueType": "Alternative",
+        "api": {
+          "id": "[concat('/subscriptions/', variables('subscriptionId'), '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuresentinel')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('PlaybookName')]",
+      "location": "[resourceGroup().location]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/connections', variables('sentinelConnectionName'))]"
+      ],
+      "properties": {
+        "state": "Disabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "actions": {
+            "Add_Incident_Comment": {
+              "inputs": {
+                "authentication": {
+                  "audience": "https://management.azure.com",
+                  "type": "ManagedServiceIdentity"
+                },
+                "body": {
+                  "properties": {
+                    "message": "@{concat('**KEV-Remediate Playbook Action**\\n\\n', if(greater(length(string(coalesce(outputs('Parse_Query_Results')?['kbId'], ''))), 0), concat('**Path:** WUfB Expedited Deployment\\n**KB:** ', outputs('Parse_Query_Results')?['kbId'], '\\n**Devices:** ', outputs('Parse_Query_Results')?['deviceCount'], '\\n**Status:** Expedited deployment created.'), concat('**Path:** Third-Party Approval-Gated Remediation\\n**CVE:** ', outputs('Parse_Query_Results')?['cveId'], '\\n**Software:** ', outputs('Parse_Query_Results')?['softwareName'], '\\n**Devices:** ', outputs('Parse_Query_Results')?['deviceCount'], '\\n**Pilot (auto):** ', string(length(variables('PilotDevices'))), '\\n**Broad (pending):** ', string(length(variables('BroadDevices'))), '\\n**MECM (notified):** ', string(length(variables('MecmDevices'))), '\\n**Unmanaged:** ', string(length(variables('UnmanagedDevices'))), '\\n**Status:** Pilot devices submitted for Intune remediation.')))}"
+                  }
+                },
+                "headers": {
+                  "Content-Type": "application/json"
+                },
+                "method": "PUT",
+                "uri": "@{concat('https://management.azure.com/subscriptions/', parameters('SubscriptionId'), '/resourceGroups/', parameters('ResourceGroupName'), '/providers/Microsoft.OperationalInsights/workspaces/', parameters('WorkspaceName'), '/providers/Microsoft.SecurityInsights/incidents/', outputs('Extract_CVE_and_KB_from_Title')?['incidentName'], '/comments/', guid(), '?api-version=2023-12-01-preview')}"
+              },
+              "runAfter": {
+                "Check_KB_Exists": [
+                  "Succeeded",
+                  "Failed"
+                ]
+              },
+              "type": "Http"
+            },
+            "Check_KB_Exists": {
+              "actions": {
+                "Path_A_WUfB_Expedite": {
+                  "actions": {
+                    "Add_Devices_To_Audience": {
+                      "inputs": {
+                        "authentication": {
+                          "audience": "https://graph.microsoft.com",
+                          "type": "ManagedServiceIdentity"
+                        },
+                        "body": {
+                          "addMembers": "@variables('DeviceIds')",
+                          "memberEntityType": "#microsoft.graph.windowsUpdates.azureADDevice"
+                        },
+                        "headers": {
+                          "Content-Type": "application/json"
+                        },
+                        "method": "POST",
+                        "uri": "@{concat(parameters('GraphApiBase'), '/beta/admin/windows/updates/deployments/', outputs('Get_Deployment_Id'), '/audience/updateAudienceById')}"
+                      },
+                      "runAfter": {
+                        "Enroll_Devices_For_Quality": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "Http"
+                    },
+                    "Check_Verification_Result": {
+                      "actions": {
+                        "Add_Remediation_Success_Comment": {
+                          "inputs": {
+                            "authentication": {
+                              "audience": "https://management.azure.com",
+                              "type": "ManagedServiceIdentity"
+                            },
+                            "body": {
+                              "properties": {
+                                "message": "@{concat('**KEV remediation verified**\\n\\n**CVE:** ', outputs('Parse_Query_Results')?['cveId'], '\\n**KB:** ', outputs('Parse_Query_Results')?['kb'], '\\n**Deployment ID:** ', outputs('Get_Deployment_Id'), '\\n**Targeted devices:** ', outputs('Parse_Query_Results')?['deviceCount'], '\\n**Verification:** MDETVM_CL no longer reports the CVE for the targeted devices.\\n**Verified at:** ', variables('LastVerificationTime'))}"
+                              }
+                            },
+                            "headers": {
+                              "Content-Type": "application/json"
+                            },
+                            "method": "PUT",
+                            "uri": "@{concat('https://management.azure.com/subscriptions/', parameters('SubscriptionId'), '/resourceGroups/', parameters('ResourceGroupName'), '/providers/Microsoft.OperationalInsights/workspaces/', parameters('WorkspaceName'), '/providers/Microsoft.SecurityInsights/incidents/', outputs('Extract_CVE_and_KB_from_Title')?['incidentName'], '/comments/', guid(), '?api-version=2023-12-01-preview')}"
+                          },
+                          "type": "Http"
+                        },
+                        "Auto_Close_Incident_When_Configured": {
+                          "actions": {
+                            "Close_Remediated_Incident": {
+                              "inputs": {
+                                "authentication": {
+                                  "audience": "https://management.azure.com",
+                                  "type": "ManagedServiceIdentity"
+                                },
+                                "body": {
+                                  "properties": {
+                                    "classification": "TruePositive",
+                                    "classificationComment": "@{concat('Automatically closed by KEV-Remediate after MDETVM_CL confirmed ', outputs('Parse_Query_Results')?['cveId'], ' no longer affects the targeted devices. Deployment ID: ', outputs('Get_Deployment_Id'))}",
+                                    "classificationReason": "SuspiciousActivity",
+                                    "severity": "@{coalesce(body('Parse_Incident')?['object']?['properties']?['severity'], 'Medium')}",
+                                    "status": "Closed",
+                                    "title": "@{outputs('Extract_CVE_and_KB_from_Title')?['title']}"
+                                  }
+                                },
+                                "headers": {
+                                  "Content-Type": "application/json"
+                                },
+                                "method": "PUT",
+                                "uri": "@{concat('https://management.azure.com/subscriptions/', parameters('SubscriptionId'), '/resourceGroups/', parameters('ResourceGroupName'), '/providers/Microsoft.OperationalInsights/workspaces/', parameters('WorkspaceName'), '/providers/Microsoft.SecurityInsights/incidents/', outputs('Extract_CVE_and_KB_from_Title')?['incidentName'], '?api-version=2024-03-01')}"
+                              },
+                              "type": "Http"
+                            }
+                          },
+                          "expression": {
+                            "and": [
+                              {
+                                "equals": [
+                                  "@parameters('AutoCloseIncidentOnRemediation')",
+                                  true
+                                ]
+                              }
+                            ]
+                          },
+                          "runAfter": {
+                            "Send_Remediation_Success_Email": [
+                              "Succeeded",
+                              "Skipped",
+                              "Failed"
+                            ]
+                          },
+                          "type": "If"
+                        },
+                        "Send_Remediation_Success_Email": {
+                          "actions": {
+                            "Send_Success_Email": {
+                              "inputs": {
+                                "authentication": {
+                                  "audience": "https://graph.microsoft.com",
+                                  "type": "ManagedServiceIdentity"
+                                },
+                                "body": {
+                                  "message": {
+                                    "body": {
+                                      "content": "@{concat('<h2>KEV remediation verified</h2><table border=\"1\" cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:Segoe UI,sans-serif\"><tr><td><b>CVE</b></td><td>', outputs('Parse_Query_Results')?['cveId'], '</td></tr><tr><td><b>KB</b></td><td>', outputs('Parse_Query_Results')?['kb'], '</td></tr><tr><td><b>Deployment ID</b></td><td>', outputs('Get_Deployment_Id'), '</td></tr><tr><td><b>Targeted Devices</b></td><td>', outputs('Parse_Query_Results')?['deviceCount'], '</td></tr><tr><td><b>Remaining Devices</b></td><td>0</td></tr><tr><td><b>Verified At</b></td><td>', variables('LastVerificationTime'), '</td></tr></table><br><p>MDETVM_CL no longer reports this CVE for the targeted devices.</p>')}",
+                                      "contentType": "HTML"
+                                    },
+                                    "subject": "@{concat('KEV remediated: ', outputs('Parse_Query_Results')?['cveId'])}",
+                                    "toRecipients": [
+                                      {
+                                        "emailAddress": {
+                                          "address": "@{parameters('NotificationEmail')}"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                },
+                                "headers": {
+                                  "Content-Type": "application/json"
+                                },
+                                "method": "POST",
+                                "uri": "@{concat(parameters('GraphApiBase'), '/v1.0/users/', parameters('NotificationEmail'), '/sendMail')}"
+                              },
+                              "type": "Http"
+                            }
+                          },
+                          "expression": {
+                            "and": [
+                              {
+                                "not": {
+                                  "equals": [
+                                    "@parameters('NotificationEmail')",
+                                    ""
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          "runAfter": {
+                            "Add_Remediation_Success_Comment": [
+                              "Succeeded",
+                              "Failed"
+                            ]
+                          },
+                          "type": "If"
+                        }
+                      },
+                      "else": {
+                        "actions": {
+                          "Add_Remediation_Escalation_Comment": {
+                            "inputs": {
+                              "authentication": {
+                                "audience": "https://management.azure.com",
+                                "type": "ManagedServiceIdentity"
+                              },
+                              "body": {
+                                "properties": {
+                                  "message": "@{concat('**KEV remediation not verified before timeout**\\n\\n**CVE:** ', outputs('Parse_Query_Results')?['cveId'], '\\n**KB:** ', outputs('Parse_Query_Results')?['kb'], '\\n**Deployment ID:** ', outputs('Get_Deployment_Id'), '\\n**Remaining device count:** ', variables('RemainingDeviceCount'), '\\n**Remaining devices:** ', join(variables('RemainingDevices'), ', '), '\\n**Last TVM seen:** ', variables('LastVerificationTime'), '\\n\\nThe expedited deployment remains active. Devices that were offline or blocked from Windows Update should receive the update when they reconnect and scan.')}"
+                                }
+                              },
+                              "headers": {
+                                "Content-Type": "application/json"
+                              },
+                              "method": "PUT",
+                              "uri": "@{concat('https://management.azure.com/subscriptions/', parameters('SubscriptionId'), '/resourceGroups/', parameters('ResourceGroupName'), '/providers/Microsoft.OperationalInsights/workspaces/', parameters('WorkspaceName'), '/providers/Microsoft.SecurityInsights/incidents/', outputs('Extract_CVE_and_KB_from_Title')?['incidentName'], '/comments/', guid(), '?api-version=2023-12-01-preview')}"
+                            },
+                            "type": "Http"
+                          },
+                          "Send_Remediation_Escalation_Email": {
+                            "actions": {
+                              "Send_Escalation_Email": {
+                                "inputs": {
+                                  "authentication": {
+                                    "audience": "https://graph.microsoft.com",
+                                    "type": "ManagedServiceIdentity"
+                                  },
+                                  "body": {
+                                    "message": {
+                                      "body": {
+                                        "content": "@{concat('<h2>KEV remediation not verified before timeout</h2><table border=\"1\" cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:Segoe UI,sans-serif\"><tr><td><b>CVE</b></td><td>', outputs('Parse_Query_Results')?['cveId'], '</td></tr><tr><td><b>KB</b></td><td>', outputs('Parse_Query_Results')?['kb'], '</td></tr><tr><td><b>Deployment ID</b></td><td>', outputs('Get_Deployment_Id'), '</td></tr><tr><td><b>Remaining Device Count</b></td><td>', variables('RemainingDeviceCount'), '</td></tr><tr><td><b>Remaining Devices</b></td><td>', join(variables('RemainingDevices'), ', '), '</td></tr><tr><td><b>Last TVM Seen</b></td><td>', variables('LastVerificationTime'), '</td></tr></table><br><p>The expedited deployment remains active. This is an exception path, not a manual monitoring requirement.</p>')}",
+                                        "contentType": "HTML"
+                                      },
+                                      "subject": "@{concat('KEV remediation needs attention: ', outputs('Parse_Query_Results')?['cveId'])}",
+                                      "toRecipients": [
+                                        {
+                                          "emailAddress": {
+                                            "address": "@{parameters('NotificationEmail')}"
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "headers": {
+                                    "Content-Type": "application/json"
+                                  },
+                                  "method": "POST",
+                                  "uri": "@{concat(parameters('GraphApiBase'), '/v1.0/users/', parameters('NotificationEmail'), '/sendMail')}"
+                                },
+                                "type": "Http"
+                              }
+                            },
+                            "expression": {
+                              "and": [
+                                {
+                                  "not": {
+                                    "equals": [
+                                      "@parameters('NotificationEmail')",
+                                      ""
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            "runAfter": {
+                              "Add_Remediation_Escalation_Comment": [
+                                "Succeeded",
+                                "Failed"
+                              ]
+                            },
+                            "type": "If"
+                          }
+                        }
+                      },
+                      "expression": {
+                        "and": [
+                          {
+                            "equals": [
+                              "@variables('RemediationCleared')",
+                              true
+                            ]
+                          }
+                        ]
+                      },
+                      "runAfter": {
+                        "Verify_Remediation_Until_Cleared": [
+                          "Succeeded",
+                          "Failed",
+                          "TimedOut"
+                        ]
+                      },
+                      "type": "If"
+                    },
+                    "Create_Expedited_Deployment": {
+                      "inputs": {
+                        "authentication": {
+                          "audience": "https://graph.microsoft.com",
+                          "type": "ManagedServiceIdentity"
+                        },
+                        "body": {
+                          "content": {
+                            "@@odata.type": "#microsoft.graph.windowsUpdates.catalogContent",
+                            "catalogEntry": {
+                              "@@odata.type": "#microsoft.graph.windowsUpdates.qualityUpdateCatalogEntry",
+                              "id": "@{outputs('Select_Catalog_Entry')}"
+                            }
+                          },
+                          "settings": {
+                            "@@odata.type": "#microsoft.graph.windowsUpdates.deploymentSettings",
+                            "expedite": {
+                              "isExpedited": true
+                            },
+                            "userExperience": {
+                              "daysUntilForcedReboot": "@parameters('DaysUntilForcedReboot')"
+                            }
+                          }
+                        },
+                        "headers": {
+                          "Content-Type": "application/json"
+                        },
+                        "method": "POST",
+                        "uri": "@{concat(parameters('GraphApiBase'), '/beta/admin/windows/updates/deployments')}"
+                      },
+                      "runAfter": {
+                        "Select_Catalog_Entry": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "Http"
+                    },
+                    "Enroll_Devices_For_Quality": {
+                      "inputs": {
+                        "authentication": {
+                          "audience": "https://graph.microsoft.com",
+                          "type": "ManagedServiceIdentity"
+                        },
+                        "body": {
+                          "ids": "@variables('DeviceIds')",
+                          "memberEntityType": "#microsoft.graph.windowsUpdates.azureADDevice",
+                          "updateCategory": "quality"
+                        },
+                        "headers": {
+                          "Content-Type": "application/json"
+                        },
+                        "method": "POST",
+                        "uri": "@{concat(parameters('GraphApiBase'), '/beta/admin/windows/updates/updatableAssets/enrollAssetsById')}"
+                      },
+                      "runAfter": {
+                        "Lookup_Each_Device": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "Http"
+                    },
+                    "Filter_Catalog_By_Recommended_KB": {
+                      "inputs": {
+                        "from": "@body('Lookup_WUfB_Catalog')?['value']",
+                        "where": "@contains(toLower(string(item()?['productRevisions'])), concat('kb', replace(toLower(string(outputs('Parse_Query_Results')?['kbId'])), 'kb', '')))"
+                      },
+                      "runAfter": {
+                        "Lookup_WUfB_Catalog": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "Query"
+                    },
+                    "Filter_Catalog_By_Security": {
+                      "inputs": {
+                        "from": "@body('Lookup_WUfB_Catalog')?['value']",
+                        "where": "@equals(item()?['qualityUpdateClassification'], 'security')"
+                      },
+                      "runAfter": {
+                        "Filter_Catalog_By_Recommended_KB": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "Query"
+                    },
+                    "Get_Deployment_Id": {
+                      "inputs": "@body('Create_Expedited_Deployment')?['id']",
+                      "runAfter": {
+                        "Create_Expedited_Deployment": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "Compose"
+                    },
+                    "Lookup_Each_Device": {
+                      "actions": {
+                        "Append_DeviceId": {
+                          "inputs": {
+                            "name": "DeviceIds",
+                            "value": "@{body('Get_Entra_Device')?['value']?[0]?['deviceId']}"
+                          },
+                          "runAfter": {
+                            "Get_Entra_Device": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "AppendToArrayVariable"
+                        },
+                        "Get_Entra_Device": {
+                          "inputs": {
+                            "authentication": {
+                              "audience": "https://graph.microsoft.com",
+                              "type": "ManagedServiceIdentity"
+                            },
+                            "method": "GET",
+                            "uri": "@{concat(parameters('GraphApiBase'), '/v1.0/devices?$filter=displayName eq ''', items('Lookup_Each_Device'), '''&$select=id,displayName,deviceId')}"
+                          },
+                          "type": "Http"
+                        }
+                      },
+                      "foreach": "@outputs('Parse_Query_Results')?['devices']",
+                      "runAfter": {
+                        "Get_Deployment_Id": [
+                          "Succeeded"
+                        ]
+                      },
+                      "runtimeConfiguration": {
+                        "concurrency": {
+                          "repetitions": 20
+                        }
+                      },
+                      "type": "Foreach"
+                    },
+                    "Lookup_WUfB_Catalog": {
+                      "inputs": {
+                        "authentication": {
+                          "audience": "https://graph.microsoft.com",
+                          "type": "ManagedServiceIdentity"
+                        },
+                        "method": "GET",
+                        "uri": "@{concat(parameters('GraphApiBase'), '/beta/admin/windows/updates/catalog/entries?$filter=isof(''microsoft.graph.windowsUpdates.qualityUpdateCatalogEntry'') and microsoft.graph.windowsUpdates.qualityUpdateCatalogEntry/isExpeditable eq true&$expand=microsoft.graph.windowsUpdates.qualityUpdateCatalogEntry/productRevisions&$orderby=releaseDateTime desc&$top=5')}"
+                      },
+                      "type": "Http"
+                    },
+                    "Select_Catalog_Entry": {
+                      "inputs": "@if(greater(length(body('Filter_Catalog_By_Recommended_KB')), 0), first(body('Filter_Catalog_By_Recommended_KB'))?['id'], if(greater(length(body('Filter_Catalog_By_Security')), 0), first(body('Filter_Catalog_By_Security'))?['id'], first(body('Lookup_WUfB_Catalog')?['value'])?['id']))",
+                      "runAfter": {
+                        "Filter_Catalog_By_Security": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "Compose"
+                    },
+                    "Set_Result_Expedite": {
+                      "inputs": {
+                        "action": "WUfB Expedited Deployment",
+                        "cveId": "@outputs('Parse_Query_Results')?['cveId']",
+                        "deploymentId": "@body('Create_Expedited_Deployment')?['id']",
+                        "deviceCount": "@outputs('Parse_Query_Results')?['deviceCount']",
+                        "enrolledDevices": "@length(variables('DeviceIds'))",
+                        "kb": "@outputs('Parse_Query_Results')?['kb']",
+                        "status": "Deployment created  devices enrolled and added to audience"
+                      },
+                      "runAfter": {
+                        "Add_Devices_To_Audience": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "Compose"
+                    },
+                    "Verify_Remediation_Until_Cleared": {
+                      "actions": {
+                        "Query_Remediation_Status": {
+                          "inputs": {
+                            "authentication": {
+                              "audience": "https://api.loganalytics.io",
+                              "type": "ManagedServiceIdentity"
+                            },
+                            "body": {
+                              "query": "@{concat('let targetDevices = dynamic(', string(outputs('Parse_Query_Results')?['devices']), '); let latestDeviceTvm = MDETVM_CL | where set_has_element(targetDevices, deviceName) | summarize LatestTime = max(TimeGenerated) by deviceName; MDETVM_CL | join kind=inner latestDeviceTvm on deviceName | where TimeGenerated == LatestTime | where cveId == \"', outputs('Parse_Query_Results')?['cveId'], '\" | summarize RemainingDeviceCount = dcount(deviceName), RemainingDevices = make_set(deviceName, 10000), LastSeen = max(TimeGenerated)')}"
+                            },
+                            "headers": {
+                              "Content-Type": "application/json"
+                            },
+                            "method": "POST",
+                            "uri": "@{concat('https://api.loganalytics.io/v1/workspaces/', parameters('WorkspaceCustomerId'), '/query')}"
+                          },
+                          "runAfter": {
+                            "Wait_For_TVM_Indexing": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "Http"
+                        },
+                        "Set_Last_Verification_Time": {
+                          "inputs": {
+                            "name": "LastVerificationTime",
+                            "value": "@string(coalesce(body('Query_Remediation_Status')?['tables']?[0]?['rows']?[0]?[2], utcNow()))"
+                          },
+                          "runAfter": {
+                            "Set_Remaining_Devices": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "SetVariable"
+                        },
+                        "Set_Remaining_Device_Count": {
+                          "inputs": {
+                            "name": "RemainingDeviceCount",
+                            "value": "@int(coalesce(body('Query_Remediation_Status')?['tables']?[0]?['rows']?[0]?[0], 0))"
+                          },
+                          "runAfter": {
+                            "Query_Remediation_Status": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "SetVariable"
+                        },
+                        "Set_Remaining_Devices": {
+                          "inputs": {
+                            "name": "RemainingDevices",
+                            "value": "@json(coalesce(body('Query_Remediation_Status')?['tables']?[0]?['rows']?[0]?[1], '[]'))"
+                          },
+                          "runAfter": {
+                            "Set_Remaining_Device_Count": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "SetVariable"
+                        },
+                        "Set_Remediation_Cleared": {
+                          "inputs": {
+                            "name": "RemediationCleared",
+                            "value": "@equals(variables('RemainingDeviceCount'), 0)"
+                          },
+                          "runAfter": {
+                            "Set_Last_Verification_Time": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "SetVariable"
+                        },
+                        "Trigger_MDETVM_Ingest": {
+                          "inputs": {
+                            "authentication": {
+                              "audience": "https://management.azure.com",
+                              "type": "ManagedServiceIdentity"
+                            },
+                            "method": "POST",
+                            "uri": "@{concat('https://management.azure.com/subscriptions/', parameters('SubscriptionId'), '/resourceGroups/', parameters('ResourceGroupName'), '/providers/Microsoft.Logic/workflows/', parameters('MdeTvmIngestWorkflowName'), '/triggers/Recurrence/run?api-version=2016-06-01')}"
+                          },
+                          "runAfter": {
+                            "Wait_Before_Verification": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "Http"
+                        },
+                        "Wait_Before_Verification": {
+                          "inputs": {
+                            "interval": {
+                              "count": "@parameters('VerificationDelayMinutes')",
+                              "unit": "Minute"
+                            }
+                          },
+                          "type": "Wait"
+                        },
+                        "Wait_For_TVM_Indexing": {
+                          "inputs": {
+                            "interval": {
+                              "count": 1,
+                              "unit": "Minute"
+                            }
+                          },
+                          "runAfter": {
+                            "Trigger_MDETVM_Ingest": [
+                              "Succeeded",
+                              "Failed",
+                              "TimedOut"
+                            ]
+                          },
+                          "type": "Wait"
+                        }
+                      },
+                      "expression": "@equals(variables('RemediationCleared'), true)",
+                      "limit": {
+                        "count": "@parameters('VerificationMaxAttempts')",
+                        "timeout": "P1D"
+                      },
+                      "runAfter": {
+                        "Set_Result_Expedite": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "Until"
+                    }
+                  },
+                  "type": "Scope"
+                }
+              },
+              "else": {
+                "actions": {
+                  "Path_B_Third_Party_Approval": {
+                    "actions": {
+                      "Classify_Devices_By_Agent": {
+                        "actions": {
+                          "Lookup_Device_In_Intune": {
+                            "inputs": {
+                              "authentication": {
+                                "audience": "https://graph.microsoft.com",
+                                "type": "ManagedServiceIdentity"
+                              },
+                              "method": "GET",
+                              "uri": "@{concat(parameters('GraphApiBase'), '/beta/deviceManagement/managedDevices?$filter=deviceName eq ''', items('Classify_Devices_By_Agent'), '''&$select=id,deviceName,azureADDeviceId,managementAgent,lastSyncDateTime,osVersion')}"
+                            },
+                            "type": "Http"
+                          },
+                          "Route_Device": {
+                            "actions": {
+                              "Check_Agent_Type": {
+                                "cases": {
+                                  "CoManaged_MDM": {
+                                    "actions": {
+                                      "Check_Pilot_Group_CoMgmt": {
+                                        "inputs": {
+                                          "authentication": {
+                                            "audience": "https://graph.microsoft.com",
+                                            "type": "ManagedServiceIdentity"
+                                          },
+                                          "headers": {
+                                            "ConsistencyLevel": "eventual"
+                                          },
+                                          "method": "GET",
+                                          "uri": "@{concat(parameters('GraphApiBase'), '/beta/groups/ee89273d-a7d0-42ed-b398-972b89c74c92/members?$filter=displayName eq ''', items('Classify_Devices_By_Agent'), '''&$count=true&$select=id,displayName')}"
+                                        },
+                                        "type": "Http"
+                                      },
+                                      "Route_CoMgmt_Ring": {
+                                        "actions": {
+                                          "Append_Pilot_CoMgmt": {
+                                            "inputs": {
+                                              "name": "PilotDevices",
+                                              "value": {
+                                                "deviceName": "@{items('Classify_Devices_By_Agent')}",
+                                                "managedDeviceId": "@{first(body('Lookup_Device_In_Intune')?['value'])?['id']}",
+                                                "managementAgent": "configurationManagerClientMdm",
+                                                "ring": "pilot"
+                                              }
+                                            },
+                                            "type": "AppendToArrayVariable"
+                                          }
+                                        },
+                                        "else": {
+                                          "actions": {
+                                            "Append_Broad_CoMgmt": {
+                                              "inputs": {
+                                                "name": "BroadDevices",
+                                                "value": {
+                                                  "deviceName": "@{items('Classify_Devices_By_Agent')}",
+                                                  "managedDeviceId": "@{first(body('Lookup_Device_In_Intune')?['value'])?['id']}",
+                                                  "managementAgent": "configurationManagerClientMdm",
+                                                  "ring": "broad"
+                                                }
+                                              },
+                                              "type": "AppendToArrayVariable"
+                                            }
+                                          }
+                                        },
+                                        "expression": {
+                                          "and": [
+                                            {
+                                              "greater": [
+                                                "@length(body('Check_Pilot_Group_CoMgmt')?['value'])",
+                                                0
+                                              ]
+                                            }
+                                          ]
+                                        },
+                                        "runAfter": {
+                                          "Check_Pilot_Group_CoMgmt": [
+                                            "Succeeded"
+                                          ]
+                                        },
+                                        "type": "If"
+                                      }
+                                    },
+                                    "case": "configurationManagerClientMdm"
+                                  },
+                                  "ConfigMgr": {
+                                    "actions": {
+                                      "Append_MECM": {
+                                        "inputs": {
+                                          "name": "MecmDevices",
+                                          "value": {
+                                            "deviceName": "@{items('Classify_Devices_By_Agent')}",
+                                            "managedDeviceId": "@{first(body('Lookup_Device_In_Intune')?['value'])?['id']}",
+                                            "managementAgent": "configurationManagerClient",
+                                            "ring": "mecm"
+                                          }
+                                        },
+                                        "type": "AppendToArrayVariable"
+                                      }
+                                    },
+                                    "case": "configurationManagerClient"
+                                  },
+                                  "MDM": {
+                                    "actions": {
+                                      "Check_Pilot_Group_MDM": {
+                                        "inputs": {
+                                          "authentication": {
+                                            "audience": "https://graph.microsoft.com",
+                                            "type": "ManagedServiceIdentity"
+                                          },
+                                          "headers": {
+                                            "ConsistencyLevel": "eventual"
+                                          },
+                                          "method": "GET",
+                                          "uri": "@{concat(parameters('GraphApiBase'), '/beta/groups/ee89273d-a7d0-42ed-b398-972b89c74c92/members?$filter=displayName eq ''', items('Classify_Devices_By_Agent'), '''&$count=true&$select=id,displayName')}"
+                                        },
+                                        "type": "Http"
+                                      },
+                                      "Route_MDM_Ring": {
+                                        "actions": {
+                                          "Append_Pilot": {
+                                            "inputs": {
+                                              "name": "PilotDevices",
+                                              "value": {
+                                                "deviceName": "@{items('Classify_Devices_By_Agent')}",
+                                                "managedDeviceId": "@{first(body('Lookup_Device_In_Intune')?['value'])?['id']}",
+                                                "managementAgent": "mdm",
+                                                "ring": "pilot"
+                                              }
+                                            },
+                                            "type": "AppendToArrayVariable"
+                                          }
+                                        },
+                                        "else": {
+                                          "actions": {
+                                            "Append_Broad": {
+                                              "inputs": {
+                                                "name": "BroadDevices",
+                                                "value": {
+                                                  "deviceName": "@{items('Classify_Devices_By_Agent')}",
+                                                  "managedDeviceId": "@{first(body('Lookup_Device_In_Intune')?['value'])?['id']}",
+                                                  "managementAgent": "mdm",
+                                                  "ring": "broad"
+                                                }
+                                              },
+                                              "type": "AppendToArrayVariable"
+                                            }
+                                          }
+                                        },
+                                        "expression": {
+                                          "and": [
+                                            {
+                                              "greater": [
+                                                "@length(body('Check_Pilot_Group_MDM')?['value'])",
+                                                0
+                                              ]
+                                            }
+                                          ]
+                                        },
+                                        "runAfter": {
+                                          "Check_Pilot_Group_MDM": [
+                                            "Succeeded"
+                                          ]
+                                        },
+                                        "type": "If"
+                                      }
+                                    },
+                                    "case": "mdm"
+                                  }
+                                },
+                                "default": {
+                                  "actions": {
+                                    "Append_Unmanaged": {
+                                      "inputs": {
+                                        "name": "UnmanagedDevices",
+                                        "value": {
+                                          "deviceName": "@{items('Classify_Devices_By_Agent')}",
+                                          "managedDeviceId": "@{first(body('Lookup_Device_In_Intune')?['value'])?['id']}",
+                                          "managementAgent": "@{first(body('Lookup_Device_In_Intune')?['value'])?['managementAgent']}",
+                                          "reason": "Agent type not supported for automated remediation"
+                                        }
+                                      },
+                                      "type": "AppendToArrayVariable"
+                                    }
+                                  }
+                                },
+                                "expression": "@first(body('Lookup_Device_In_Intune')?['value'])?['managementAgent']",
+                                "type": "Switch"
+                              }
+                            },
+                            "else": {
+                              "actions": {
+                                "Append_Not_Found": {
+                                  "inputs": {
+                                    "name": "UnmanagedDevices",
+                                    "value": {
+                                      "deviceName": "@{items('Classify_Devices_By_Agent')}",
+                                      "managedDeviceId": "",
+                                      "managementAgent": "none",
+                                      "reason": "Device not found in Intune"
+                                    }
+                                  },
+                                  "type": "AppendToArrayVariable"
+                                }
+                              }
+                            },
+                            "expression": {
+                              "and": [
+                                {
+                                  "greater": [
+                                    "@length(body('Lookup_Device_In_Intune')?['value'])",
+                                    0
+                                  ]
+                                }
+                              ]
+                            },
+                            "runAfter": {
+                              "Lookup_Device_In_Intune": [
+                                "Succeeded"
+                              ]
+                            },
+                            "type": "If"
+                          }
+                        },
+                        "foreach": "@outputs('Parse_Query_Results')?['devices']",
+                        "runAfter": {
+                          "Ensure_WinGet_Remediation_Script": [
+                            "Succeeded"
+                          ]
+                        },
+                        "runtimeConfiguration": {
+                          "concurrency": {
+                            "repetitions": 1
+                          }
+                        },
+                        "type": "Foreach"
+                      },
+                      "Ensure_WinGet_Remediation_Script": {
+                        "actions": {
+                          "Use_Existing_Script": {
+                            "inputs": {
+                              "name": "WinGetRemediationScriptId",
+                              "value": "@{first(body('Find_WinGet_Remediation_Script')?['value'])?['id']}"
+                            },
+                            "type": "SetVariable"
+                          }
+                        },
+                        "else": {
+                          "actions": {
+                            "Create_WinGet_Remediation_Script": {
+                              "inputs": {
+                                "authentication": {
+                                  "audience": "https://graph.microsoft.com",
+                                  "type": "ManagedServiceIdentity"
+                                },
+                                "body": {
+                                  "@@odata.type": "#microsoft.graph.deviceHealthScript",
+                                  "description": "Updates mapped third-party CISA KEV packages with WinGet.",
+                                  "detectionScriptContent": "JEVycm9yQWN0aW9uUHJlZmVyZW5jZSA9ICdTaWxlbnRseUNvbnRpbnVlJwokcGFja2FnZUlkcyA9IEAoJzd6aXAuN3ppcCcsICdOb3RlcGFkKysuTm90ZXBhZCsrJykKZnVuY3Rpb24gR2V0LVdpbmdldFBhdGggewogICAgJGNvbW1hbmQgPSBHZXQtQ29tbWFuZCB3aW5nZXQuZXhlIC1FcnJvckFjdGlvbiBTaWxlbnRseUNvbnRpbnVlCiAgICBpZiAoJGNvbW1hbmQpIHsgcmV0dXJuICRjb21tYW5kLlNvdXJjZSB9CiAgICAkd2luZG93c0FwcHMgPSBKb2luLVBhdGggJGVudjpQcm9ncmFtRmlsZXMgJ1dpbmRvd3NBcHBzJwogICAgJGNhbmRpZGF0ZSA9IEdldC1DaGlsZEl0ZW0gLVBhdGggJHdpbmRvd3NBcHBzIC1GaWx0ZXIgd2luZ2V0LmV4ZSAtUmVjdXJzZSAtRXJyb3JBY3Rpb24gU2lsZW50bHlDb250aW51ZSB8IFNvcnQtT2JqZWN0IEZ1bGxOYW1lIC1EZXNjZW5kaW5nIHwgU2VsZWN0LU9iamVjdCAtRmlyc3QgMQogICAgaWYgKCRjYW5kaWRhdGUpIHsgcmV0dXJuICRjYW5kaWRhdGUuRnVsbE5hbWUgfQogICAgcmV0dXJuICRudWxsCn0KJHdpbmdldCA9IEdldC1XaW5nZXRQYXRoCmlmICgtbm90ICR3aW5nZXQpIHsKICAgIFdyaXRlLU91dHB1dCAnd2luZ2V0LmV4ZSB3YXMgbm90IGZvdW5kLicKICAgIGV4aXQgMQp9CiRuZWVkc1VwZGF0ZSA9ICRmYWxzZQpmb3JlYWNoICgkcGFja2FnZUlkIGluICRwYWNrYWdlSWRzKSB7CiAgICAkaW5zdGFsbGVkID0gJiAkd2luZ2V0IGxpc3QgLS1pZCAkcGFja2FnZUlkIC0tZXhhY3QgLS1hY2NlcHQtc291cmNlLWFncmVlbWVudHMgLS1kaXNhYmxlLWludGVyYWN0aXZpdHkgMj4kbnVsbCB8IE91dC1TdHJpbmcKICAgIGlmICgkaW5zdGFsbGVkIC1ub3RtYXRjaCBbcmVnZXhdOjpFc2NhcGUoJHBhY2thZ2VJZCkpIHsgY29udGludWUgfQogICAgJHVwZ3JhZGUgPSAmICR3aW5nZXQgdXBncmFkZSAtLWlkICRwYWNrYWdlSWQgLS1leGFjdCAtLWFjY2VwdC1zb3VyY2UtYWdyZWVtZW50cyAtLWRpc2FibGUtaW50ZXJhY3Rpdml0eSAyPiRudWxsIHwgT3V0LVN0cmluZwogICAgaWYgKCR1cGdyYWRlIC1tYXRjaCBbcmVnZXhdOjpFc2NhcGUoJHBhY2thZ2VJZCkpIHsKICAgICAgICBXcml0ZS1PdXRwdXQgIiRwYWNrYWdlSWQgdXBkYXRlIGF2YWlsYWJsZS4iCiAgICAgICAgJG5lZWRzVXBkYXRlID0gJHRydWUKICAgIH0KfQppZiAoJG5lZWRzVXBkYXRlKSB7IGV4aXQgMSB9CldyaXRlLU91dHB1dCAnTm8gbWFwcGVkIEtFViBwYWNrYWdlIHVwZGF0ZXMgZGV0ZWN0ZWQuJwpleGl0IDA=",
+                                  "deviceHealthScriptType": "deviceHealthScript",
+                                  "displayName": "KEV Third-Party WinGet Remediation",
+                                  "enforceSignatureCheck": false,
+                                  "isGlobalScript": false,
+                                  "publisher": "KEV-Remediate",
+                                  "remediationScriptContent": "JEVycm9yQWN0aW9uUHJlZmVyZW5jZSA9ICdDb250aW51ZScKJHBhY2thZ2VJZHMgPSBAKCc3emlwLjd6aXAnLCAnTm90ZXBhZCsrLk5vdGVwYWQrKycpCmZ1bmN0aW9uIEdldC1XaW5nZXRQYXRoIHsKICAgICRjb21tYW5kID0gR2V0LUNvbW1hbmQgd2luZ2V0LmV4ZSAtRXJyb3JBY3Rpb24gU2lsZW50bHlDb250aW51ZQogICAgaWYgKCRjb21tYW5kKSB7IHJldHVybiAkY29tbWFuZC5Tb3VyY2UgfQogICAgJHdpbmRvd3NBcHBzID0gSm9pbi1QYXRoICRlbnY6UHJvZ3JhbUZpbGVzICdXaW5kb3dzQXBwcycKICAgICRjYW5kaWRhdGUgPSBHZXQtQ2hpbGRJdGVtIC1QYXRoICR3aW5kb3dzQXBwcyAtRmlsdGVyIHdpbmdldC5leGUgLVJlY3Vyc2UgLUVycm9yQWN0aW9uIFNpbGVudGx5Q29udGludWUgfCBTb3J0LU9iamVjdCBGdWxsTmFtZSAtRGVzY2VuZGluZyB8IFNlbGVjdC1PYmplY3QgLUZpcnN0IDEKICAgIGlmICgkY2FuZGlkYXRlKSB7IHJldHVybiAkY2FuZGlkYXRlLkZ1bGxOYW1lIH0KICAgIHJldHVybiAkbnVsbAp9CiR3aW5nZXQgPSBHZXQtV2luZ2V0UGF0aAppZiAoLW5vdCAkd2luZ2V0KSB7CiAgICBXcml0ZS1PdXRwdXQgJ3dpbmdldC5leGUgd2FzIG5vdCBmb3VuZC4nCiAgICBleGl0IDEKfQokZmFpbHVyZXMgPSBAKCkKZm9yZWFjaCAoJHBhY2thZ2VJZCBpbiAkcGFja2FnZUlkcykgewogICAgJGluc3RhbGxlZCA9ICYgJHdpbmdldCBsaXN0IC0taWQgJHBhY2thZ2VJZCAtLWV4YWN0IC0tYWNjZXB0LXNvdXJjZS1hZ3JlZW1lbnRzIC0tZGlzYWJsZS1pbnRlcmFjdGl2aXR5IDI+JG51bGwgfCBPdXQtU3RyaW5nCiAgICBpZiAoJGluc3RhbGxlZCAtbm90bWF0Y2ggW3JlZ2V4XTo6RXNjYXBlKCRwYWNrYWdlSWQpKSB7IGNvbnRpbnVlIH0KICAgIFdyaXRlLU91dHB1dCAiVXBncmFkaW5nICRwYWNrYWdlSWQuIgogICAgJiAkd2luZ2V0IHVwZ3JhZGUgLS1pZCAkcGFja2FnZUlkIC0tZXhhY3QgLS1zaWxlbnQgLS1hY2NlcHQtcGFja2FnZS1hZ3JlZW1lbnRzIC0tYWNjZXB0LXNvdXJjZS1hZ3JlZW1lbnRzIC0tZGlzYWJsZS1pbnRlcmFjdGl2aXR5CiAgICBpZiAoJExBU1RFWElUQ09ERSAtbmUgMCkgeyAkZmFpbHVyZXMgKz0gJHBhY2thZ2VJZCB9Cn0KaWYgKCRmYWlsdXJlcy5Db3VudCAtZ3QgMCkgewogICAgV3JpdGUtT3V0cHV0ICJGYWlsZWQgdG8gdXBncmFkZTogJCgkZmFpbHVyZXMgLWpvaW4gJywgJykiCiAgICBleGl0IDEKfQpXcml0ZS1PdXRwdXQgJ01hcHBlZCBLRVYgcGFja2FnZSB1cGdyYWRlcyBjb21wbGV0ZWQuJwpleGl0IDA=",
+                                  "roleScopeTagIds": [
+                                    "0"
+                                  ],
+                                  "runAs32Bit": false,
+                                  "runAsAccount": "system",
+                                  "version": "1.0"
+                                },
+                                "headers": {
+                                  "Content-Type": "application/json"
+                                },
+                                "method": "POST",
+                                "uri": "@{concat(parameters('GraphApiBase'), '/beta/deviceManagement/deviceHealthScripts')}"
+                              },
+                              "type": "Http"
+                            },
+                            "Use_New_Script": {
+                              "inputs": {
+                                "name": "WinGetRemediationScriptId",
+                                "value": "@{body('Create_WinGet_Remediation_Script')?['id']}"
+                              },
+                              "runAfter": {
+                                "Create_WinGet_Remediation_Script": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "type": "SetVariable"
+                            }
+                          }
+                        },
+                        "expression": {
+                          "and": [
+                            {
+                              "greater": [
+                                "@length(body('Find_WinGet_Remediation_Script')?['value'])",
+                                0
+                              ]
+                            }
+                          ]
+                        },
+                        "runAfter": {
+                          "Find_WinGet_Remediation_Script": [
+                            "Succeeded"
+                          ]
+                        },
+                        "type": "If"
+                      },
+                      "Find_WinGet_Remediation_Script": {
+                        "inputs": {
+                          "authentication": {
+                            "audience": "https://graph.microsoft.com",
+                            "type": "ManagedServiceIdentity"
+                          },
+                          "method": "GET",
+                          "uri": "@{concat(parameters('GraphApiBase'), '/beta/deviceManagement/deviceHealthScripts?$filter=displayName eq ''KEV Third-Party WinGet Remediation''&$select=id,displayName')}"
+                        },
+                        "type": "Http"
+                      },
+                      "Remediate_Pilot_Devices": {
+                        "actions": {
+                          "Append_Pilot_Result": {
+                            "inputs": {
+                              "name": "IntuneRemediationResults",
+                              "value": {
+                                "deviceName": "@{items('Remediate_Pilot_Devices')?['deviceName']}",
+                                "managedDeviceId": "@{items('Remediate_Pilot_Devices')?['managedDeviceId']}",
+                                "ring": "pilot",
+                                "status": "Submitted",
+                                "submissionHttpStatus": "@{outputs('Submit_Pilot_Remediation')['statusCode']}"
+                              }
+                            },
+                            "runAfter": {
+                              "Submit_Pilot_Remediation": [
+                                "Succeeded",
+                                "Failed"
+                              ]
+                            },
+                            "type": "AppendToArrayVariable"
+                          },
+                          "Submit_Pilot_Remediation": {
+                            "inputs": {
+                              "authentication": {
+                                "audience": "https://graph.microsoft.com",
+                                "type": "ManagedServiceIdentity"
+                              },
+                              "body": {
+                                "scriptPolicyId": "@{variables('WinGetRemediationScriptId')}"
+                              },
+                              "headers": {
+                                "Content-Type": "application/json"
+                              },
+                              "method": "POST",
+                              "uri": "@{concat(parameters('GraphApiBase'), '/beta/deviceManagement/managedDevices/', items('Remediate_Pilot_Devices')?['managedDeviceId'], '/initiateOnDemandProactiveRemediation')}"
+                            },
+                            "type": "Http"
+                          }
+                        },
+                        "foreach": "@variables('PilotDevices')",
+                        "runAfter": {
+                          "Send_Approval_Card": [
+                            "Succeeded",
+                            "Failed"
+                          ]
+                        },
+                        "runtimeConfiguration": {
+                          "concurrency": {
+                            "repetitions": 1
+                          }
+                        },
+                        "type": "Foreach"
+                      },
+                      "Send_Approval_Card": {
+                        "inputs": {
+                          "body": {
+                            "attachments": [
+                              {
+                                "content": "{\"type\":\"AdaptiveCard\",\"version\":\"1.4\",\"body\":[{\"type\":\"TextBlock\",\"text\":\"CISA KEV Third-Party Remediation\",\"size\":\"large\",\"weight\":\"bolder\",\"color\":\"attention\"},{\"type\":\"FactSet\",\"facts\":[{\"title\":\"CVE\",\"value\":\"@{outputs('Parse_Query_Results')?['cveId']}\"},{\"title\":\"Software\",\"value\":\"@{outputs('Parse_Query_Results')?['softwareName']}\"},{\"title\":\"Total Devices\",\"value\":\"@{outputs('Parse_Query_Results')?['deviceCount']}\"},{\"title\":\"Pilot (Intune)\",\"value\":\"@{length(variables('PilotDevices'))}\"},{\"title\":\"Broad (Intune)\",\"value\":\"@{length(variables('BroadDevices'))}\"},{\"title\":\"MECM-managed\",\"value\":\"@{length(variables('MecmDevices'))}\"},{\"title\":\"Unmanaged\",\"value\":\"@{length(variables('UnmanagedDevices'))}\"},{\"title\":\"Incident #\",\"value\":\"@{outputs('Extract_CVE_and_KB_from_Title')?['incidentNumber']}\"}]},{\"type\":\"TextBlock\",\"text\":\"Pilot devices will be submitted for Intune on-demand remediation. MECM and broad devices require separate action.\",\"wrap\":true,\"size\":\"small\",\"color\":\"light\"}]}",
+                                "contentType": "application/vnd.microsoft.card.adaptive",
+                                "id": "adaptivecard"
+                              }
+                            ],
+                            "messageBody": "<attachment id=\"adaptivecard\"><div></div></attachment>",
+                            "recipient": {
+                              "channelId": "19:KOL_fVoNbsFwlNFQsyq4aTy3q_5aTmEolrIZ4zI0MXo1@thread.tacv2",
+                              "groupId": "f59caa6a-c86f-4b43-a5d9-21123339ec14"
+                            }
+                          },
+                          "host": {
+                            "connection": {
+                              "name": "@parameters('$connections')['teams']['connectionId']"
+                            }
+                          },
+                          "method": "post",
+                          "path": "/beta/teams/@{encodeURIComponent('f59caa6a-c86f-4b43-a5d9-21123339ec14')}/channels/@{encodeURIComponent('19:KOL_fVoNbsFwlNFQsyq4aTy3q_5aTmEolrIZ4zI0MXo1@thread.tacv2')}/messages"
+                        },
+                        "runAfter": {
+                          "Classify_Devices_By_Agent": [
+                            "Succeeded"
+                          ]
+                        },
+                        "type": "ApiConnection"
+                      },
+                      "Set_Third_Party_Result": {
+                        "inputs": {
+                          "action": "Third-Party Approval-Gated Remediation",
+                          "broadCount": "@length(variables('BroadDevices'))",
+                          "cveId": "@outputs('Parse_Query_Results')?['cveId']",
+                          "mecmCount": "@length(variables('MecmDevices'))",
+                          "mecmDevices": "@variables('MecmDevices')",
+                          "pilotCount": "@length(variables('PilotDevices'))",
+                          "pilotResults": "@variables('IntuneRemediationResults')",
+                          "scriptPolicyId": "@variables('WinGetRemediationScriptId')",
+                          "softwareName": "@outputs('Parse_Query_Results')?['softwareName']",
+                          "status": "Pilot remediation submitted. Broad and MECM devices require separate action.",
+                          "unmanagedCount": "@length(variables('UnmanagedDevices'))",
+                          "unmanagedDevices": "@variables('UnmanagedDevices')"
+                        },
+                        "runAfter": {
+                          "Remediate_Pilot_Devices": [
+                            "Succeeded"
+                          ]
+                        },
+                        "type": "Compose"
+                      }
+                    },
+                    "type": "Scope"
+                  }
+                }
+              },
+              "expression": {
+                "and": [
+                  {
+                    "greater": [
+                      "@length(string(coalesce(outputs('Parse_Query_Results')?['kbId'], '')))",
+                      0
+                    ]
+                  }
+                ]
+              },
+              "runAfter": {
+                "Init_DeviceId_Array": [
+                  "Succeeded"
+                ]
+              },
+              "type": "If"
+            },
+            "Extract_CVE_and_KB_from_Title": {
+              "inputs": {
+                "incidentName": "@body('Parse_Incident')?['object']?['name']",
+                "incidentNumber": "@body('Parse_Incident')?['object']?['properties']?['incidentNumber']",
+                "title": "@body('Parse_Incident')?['object']?['properties']?['title']"
+              },
+              "runAfter": {
+                "Parse_Incident": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Compose"
+            },
+            "Init_DeviceId_Array": {
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "DeviceIds",
+                    "type": "array",
+                    "value": []
+                  },
+                  {
+                    "name": "RemediationCleared",
+                    "type": "boolean",
+                    "value": false
+                  },
+                  {
+                    "name": "RemainingDeviceCount",
+                    "type": "integer",
+                    "value": -1
+                  },
+                  {
+                    "name": "RemainingDevices",
+                    "type": "array",
+                    "value": []
+                  },
+                  {
+                    "name": "LastVerificationTime",
+                    "type": "string",
+                    "value": ""
+                  },
+                  {
+                    "name": "WinGetRemediationScriptId",
+                    "type": "string",
+                    "value": ""
+                  },
+                  {
+                    "name": "IntuneRemediationResults",
+                    "type": "array",
+                    "value": []
+                  },
+                  {
+                    "name": "PilotDevices",
+                    "type": "array",
+                    "value": []
+                  },
+                  {
+                    "name": "BroadDevices",
+                    "type": "array",
+                    "value": []
+                  },
+                  {
+                    "name": "MecmDevices",
+                    "type": "array",
+                    "value": []
+                  },
+                  {
+                    "name": "UnmanagedDevices",
+                    "type": "array",
+                    "value": []
+                  }
+                ]
+              },
+              "runAfter": {
+                "Parse_Query_Results": [
+                  "Succeeded"
+                ]
+              },
+              "type": "InitializeVariable"
+            },
+            "Notify_Teams": {
+              "actions": {
+                "Send_Teams_Card": {
+                  "inputs": {
+                    "body": {
+                      "@@context": "http://schema.org/extensions",
+                      "@@type": "MessageCard",
+                      "sections": [
+                        {
+                          "activityTitle": "@{concat('CISA KEV Remediation  ', outputs('Parse_Query_Results')?['cveId'])}",
+                          "facts": [
+                            {
+                              "name": "CVE",
+                              "value": "@{outputs('Parse_Query_Results')?['cveId']}"
+                            },
+                            {
+                              "name": "KB",
+                              "value": "@{coalesce(outputs('Parse_Query_Results')?['kb'], 'None (third-party)')}"
+                            },
+                            {
+                              "name": "Affected Devices",
+                              "value": "@{outputs('Parse_Query_Results')?['deviceCount']}"
+                            },
+                            {
+                              "name": "Action Taken",
+                              "value": "@{if(or(equals(outputs('Parse_Query_Results')?['kb'], null), equals(outputs('Parse_Query_Results')?['kb'], '')), 'Third-Party Approval-Gated Remediation', 'WUfB Expedited Deployment')}"
+                            },
+                            {
+                              "name": "Incident #",
+                              "value": "@{outputs('Extract_CVE_and_KB_from_Title')?['incidentNumber']}"
+                            }
+                          ],
+                          "markdown": true
+                        }
+                      ],
+                      "summary": "@{concat('KEV Remediation: ', outputs('Parse_Query_Results')?['cveId'])}",
+                      "themeColor": "0078D4"
+                    },
+                    "headers": {
+                      "Content-Type": "application/json"
+                    },
+                    "method": "POST",
+                    "uri": "@parameters('TeamsWebhookUrl')"
+                  },
+                  "type": "Http"
+                }
+              },
+              "expression": {
+                "and": [
+                  {
+                    "not": {
+                      "equals": [
+                        "@parameters('TeamsWebhookUrl')",
+                        ""
+                      ]
+                    }
+                  }
+                ]
+              },
+              "runAfter": {
+                "Add_Incident_Comment": [
+                  "Succeeded",
+                  "Failed"
+                ]
+              },
+              "type": "If"
+            },
+            "Parse_Incident": {
+              "inputs": {
+                "content": "@triggerBody()",
+                "schema": {
+                  "properties": {
+                    "object": {
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "properties": {
+                          "properties": {
+                            "additionalData": {
+                              "properties": {
+                                "alertsCount": {
+                                  "type": "integer"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "incidentNumber": {
+                              "type": "integer"
+                            },
+                            "severity": {
+                              "type": "string"
+                            },
+                            "title": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "runAfter": {},
+              "type": "ParseJson"
+            },
+            "Parse_Query_Results": {
+              "inputs": {
+                "cveId": "@body('Query_Incident_Details')?['tables']?[0]?['rows']?[0]?[0]",
+                "deviceCount": "@body('Query_Incident_Details')?['tables']?[0]?['rows']?[0]?[1]",
+                "devices": "@json(coalesce(body('Query_Incident_Details')?['tables']?[0]?['rows']?[0]?[2], '[]'))",
+                "kb": "@body('Query_Incident_Details')?['tables']?[0]?['rows']?[0]?[3]",
+                "kbId": "@body('Query_Incident_Details')?['tables']?[0]?['rows']?[0]?[4]"
+              },
+              "runAfter": {
+                "Query_Incident_Details": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Compose"
+            },
+            "Query_Incident_Details": {
+              "inputs": {
+                "authentication": {
+                  "audience": "https://api.loganalytics.io",
+                  "type": "ManagedServiceIdentity"
+                },
+                "body": {
+                  "query": "@{concat('let targetCve = \"', split(split(outputs('Extract_CVE_and_KB_from_Title')?['title'], ': ')[1], ' on ')[0], '\"; let latestDeviceTvm = MDETVM_CL | summarize LatestTime = max(TimeGenerated) by deviceName; MDETVM_CL | join kind=inner latestDeviceTvm on deviceName | where TimeGenerated == LatestTime | where cveId == targetCve | summarize DeviceCount = dcount(deviceName), Devices = make_set(deviceName, 10000), KB = take_any(recommendedSecurityUpdate), KBId = take_any(recommendedSecurityUpdateId) by cveId | take 1')}"
+                },
+                "headers": {
+                  "Content-Type": "application/json"
+                },
+                "method": "POST",
+                "uri": "@{concat('https://api.loganalytics.io/v1/workspaces/', parameters('WorkspaceCustomerId'), '/query')}"
+              },
+              "runAfter": {
+                "Extract_CVE_and_KB_from_Title": [
+                  "Succeeded"
+                ]
+              },
+              "type": "Http"
+            },
+            "Send_Email_Notification": {
+              "inputs": {
+                "authentication": {
+                  "audience": "https://graph.microsoft.com",
+                  "type": "ManagedServiceIdentity"
+                },
+                "body": {
+                  "message": {
+                    "body": {
+                      "content": "@{concat('<h2>CISA KEV Remediation Action Taken</h2><table border=\"1\" cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:Segoe UI,sans-serif\"><tr><td><b>CVE</b></td><td>', outputs('Parse_Query_Results')?['cveId'], '</td></tr><tr><td><b>KB</b></td><td>', if(greater(length(string(coalesce(outputs('Parse_Query_Results')?['kbId'], ''))), 0), outputs('Parse_Query_Results')?['kbId'], 'None (third-party)'), '</td></tr><tr><td><b>Affected Devices</b></td><td>', outputs('Parse_Query_Results')?['deviceCount'], '</td></tr><tr><td><b>Action</b></td><td>', if(greater(length(string(coalesce(outputs('Parse_Query_Results')?['kbId'], ''))), 0), 'WUfB Expedited Deployment (automated)', concat('Third-Party Approval-Gated Remediation | Pilot: ', string(length(variables('PilotDevices'))), ' | Broad: ', string(length(variables('BroadDevices'))), ' | MECM: ', string(length(variables('MecmDevices'))))), '</td></tr><tr><td><b>Incident #</b></td><td>', outputs('Extract_CVE_and_KB_from_Title')?['incidentNumber'], '</td></tr></table><br><p style=\"color:#666\">Sent by KEV-Remediate playbook</p>')}",
+                      "contentType": "HTML"
+                    },
+                    "subject": "@{concat('KEV Remediation: ', outputs('Parse_Query_Results')?['cveId'])}",
+                    "toRecipients": [
+                      {
+                        "emailAddress": {
+                          "address": "@{parameters('NotificationEmail')}"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "headers": {
+                  "Content-Type": "application/json"
+                },
+                "method": "POST",
+                "uri": "@{concat(parameters('GraphApiBase'), '/v1.0/users/', parameters('NotificationEmail'), '/sendMail')}"
+              },
+              "runAfter": {
+                "Notify_Teams": [
+                  "Succeeded",
+                  "Skipped",
+                  "Failed"
+                ]
+              },
+              "type": "Http"
+            }
+          },
+          "contentVersion": "1.0.0.0",
+          "outputs": {},
+          "parameters": {
+            "$connections": {
+              "defaultValue": {},
+              "type": "Object"
+            },
+            "AutoCloseIncidentOnRemediation": {
+              "defaultValue": true,
+              "type": "Bool"
+            },
+            "DaysUntilForcedReboot": {
+              "defaultValue": 0,
+              "type": "Int"
+            },
+            "GraphApiBase": {
+              "defaultValue": "https://graph.microsoft.com",
+              "type": "String"
+            },
+            "MdeApiBase": {
+              "defaultValue": "https://api.securitycenter.microsoft.com",
+              "type": "String"
+            },
+            "MdeTvmIngestWorkflowName": {
+              "defaultValue": "MDETVM",
+              "type": "String"
+            },
+            "NotificationEmail": {
+              "defaultValue": "admin@MngEnvMCAP017447.onmicrosoft.com",
+              "type": "String"
+            },
+            "ResourceGroupName": {
+              "defaultValue": "LearningFunTime_group",
+              "type": "String"
+            },
+            "SubscriptionId": {
+              "defaultValue": "37541677-a116-4a0d-8118-a2c3e26ea8d1",
+              "type": "String"
+            },
+            "TeamsWebhookUrl": {
+              "defaultValue": "",
+              "type": "SecureString"
+            },
+            "VerificationDelayMinutes": {
+              "defaultValue": 5,
+              "type": "Int"
+            },
+            "VerificationMaxAttempts": {
+              "defaultValue": 24,
+              "type": "Int"
+            },
+            "WorkspaceCustomerId": {
+              "defaultValue": "26f92647-2553-4c33-831c-11c27d576ba5",
+              "type": "String"
+            },
+            "WorkspaceName": {
+              "defaultValue": "Sentinel-Name-Only",
+              "type": "String"
+            }
+          },
+          "triggers": {
+            "Microsoft_Sentinel_incident": {
+              "inputs": {
+                "body": {
+                  "callback_url": "@{listCallbackUrl()}"
+                },
+                "host": {
+                  "connection": {
+                    "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                  }
+                },
+                "path": "/incident-creation"
+              },
+              "type": "ApiConnectionWebhook"
+            }
+          }
+        },
+        "parameters": {
+          "$connections": {
+            "value": {
+              "azuresentinel": {
+                "connectionId": "[resourceId('Microsoft.Web/connections', variables('sentinelConnectionName'))]",
+                "connectionName": "[variables('sentinelConnectionName')]",
+                "id": "[concat('/subscriptions/', variables('subscriptionId'), '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuresentinel')]",
+                "connectionProperties": {
+                  "authentication": {
+                    "type": "ManagedServiceIdentity"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "logicAppManagedIdentity": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Logic/workflows', parameters('PlaybookName')), '2019-05-01', 'full').identity.principalId]"
+    }
+  }
+}

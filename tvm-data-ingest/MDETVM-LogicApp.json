@@ -1,0 +1,330 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "2.0.0.0",
+  "metadata": {
+    "title": "MDETVM - MDE TVM to Sentinel (MDVM REST API + pagination)",
+    "description": "Pulls MDE Vulnerability Management data via the MDVM REST API (/api/machines/SoftwareVulnerabilitiesByMachine) using the Logic App's system-assigned managed identity, follows @odata.nextLink across pages, and ingests each page into MDETVM_CL via the DCR Logs Ingestion API in 500-row batches. Replaces the prior wdatp connector + Advanced Hunting approach which had no pagination and a 100K-row hard cap.",
+    "version": "3.0.0",
+    "prerequisites": "After deployment, run Assign-MDVMPermissions.ps1 to grant the managed identity Vulnerability.Read.All on WindowsDefenderATP and Monitoring Metrics Publisher on the DCR.",
+    "postDeployment": [
+      "Run Assign-MDVMPermissions.ps1 to grant Vulnerability.Read.All + Monitoring Metrics Publisher",
+      "Trigger manually: Logic App > Run Trigger to confirm MDETVM_CL is populated"
+    ],
+    "support": { "tier": "community" },
+    "author": { "name": "<author>" }
+  },
+  "parameters": {
+    "PlaybookName": {
+      "defaultValue": "MDETVM",
+      "type": "string",
+      "metadata": { "description": "Name for the Logic App. Also used to name the DCE, DCR, and API connection resources." }
+    },
+    "WorkspaceName": {
+      "type": "string",
+      "metadata": { "description": "Name of the Log Analytics workspace with Sentinel enabled (must be in the same resource group)." }
+    },
+    "MdeApiBaseUrl": {
+      "type": "string",
+      "defaultValue": "https://api.security.microsoft.com",
+      "metadata": { "description": "Base URL of the Microsoft Defender for Endpoint API. Commercial: https://api.security.microsoft.com" }
+    },
+    "MdeApiAudience": {
+      "type": "string",
+      "defaultValue": "https://api.securitycenter.microsoft.com",
+      "metadata": { "description": "AAD audience for the MI token used to call the MDE API. Commercial: https://api.securitycenter.microsoft.com" }
+    }
+  },
+  "variables": {
+    "dcrName": "[concat('DCR-', parameters('PlaybookName'))]",
+    "tableName": "MDETVM_CL",
+    "streamName": "Custom-MDETVM_CL",
+    "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
+    "tableSchema": [
+      { "name": "TimeGenerated", "type": "datetime" },
+      { "name": "id", "type": "string" },
+      { "name": "deviceId", "type": "string" },
+      { "name": "rbacGroupId", "type": "int" },
+      { "name": "rbacGroupName", "type": "string" },
+      { "name": "deviceName", "type": "string" },
+      { "name": "osPlatform", "type": "string" },
+      { "name": "osVersion", "type": "string" },
+      { "name": "osArchitecture", "type": "string" },
+      { "name": "softwareVendor", "type": "string" },
+      { "name": "softwareName", "type": "string" },
+      { "name": "softwareVersion", "type": "string" },
+      { "name": "cveId", "type": "string" },
+      { "name": "vulnerabilitySeverityLevel", "type": "string" },
+      { "name": "recommendedSecurityUpdate", "type": "string" },
+      { "name": "recommendedSecurityUpdateId", "type": "string" },
+      { "name": "recommendedSecurityUpdateUrl", "type": "string" },
+      { "name": "diskPaths", "type": "string" },
+      { "name": "registryPaths", "type": "string" },
+      { "name": "lastSeenTimestamp", "type": "string" },
+      { "name": "firstSeenTimestamp", "type": "string" },
+      { "name": "endOfSupportStatus", "type": "string" },
+      { "name": "endOfSupportDate", "type": "string" },
+      { "name": "exploitabilityLevel", "type": "string" },
+      { "name": "recommendationReference", "type": "string" },
+      { "name": "cvssScore", "type": "real" },
+      { "name": "securityUpdateAvailable", "type": "string" },
+      { "name": "cveMitigationStatus", "type": "string" }
+    ],
+    "streamSchema": [
+      { "name": "TimeGenerated", "type": "datetime" },
+      { "name": "id", "type": "string" },
+      { "name": "deviceId", "type": "string" },
+      { "name": "rbacGroupId", "type": "int" },
+      { "name": "rbacGroupName", "type": "string" },
+      { "name": "deviceName", "type": "string" },
+      { "name": "osPlatform", "type": "string" },
+      { "name": "osVersion", "type": "string" },
+      { "name": "osArchitecture", "type": "string" },
+      { "name": "softwareVendor", "type": "string" },
+      { "name": "softwareName", "type": "string" },
+      { "name": "softwareVersion", "type": "string" },
+      { "name": "cveId", "type": "string" },
+      { "name": "vulnerabilitySeverityLevel", "type": "string" },
+      { "name": "recommendedSecurityUpdate", "type": "string" },
+      { "name": "recommendedSecurityUpdateId", "type": "string" },
+      { "name": "recommendedSecurityUpdateUrl", "type": "string" },
+      { "name": "diskPaths", "type": "string" },
+      { "name": "registryPaths", "type": "string" },
+      { "name": "lastSeenTimestamp", "type": "string" },
+      { "name": "firstSeenTimestamp", "type": "string" },
+      { "name": "endOfSupportStatus", "type": "string" },
+      { "name": "endOfSupportDate", "type": "string" },
+      { "name": "exploitabilityLevel", "type": "string" },
+      { "name": "recommendationReference", "type": "string" },
+      { "name": "cvssScore", "type": "string" },
+      { "name": "securityUpdateAvailable", "type": "string" },
+      { "name": "cveMitigationStatus", "type": "string" }
+    ]
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/tables",
+      "apiVersion": "2022-10-01",
+      "name": "[concat(parameters('WorkspaceName'), '/', variables('tableName'))]",
+      "properties": {
+        "schema": { "name": "[variables('tableName')]", "columns": "[variables('tableSchema')]" },
+        "retentionInDays": 90,
+        "plan": "Analytics"
+      }
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionRules",
+      "apiVersion": "2023-03-11",
+      "name": "[variables('dcrName')]",
+      "location": "[resourceGroup().location]",
+      "kind": "Direct",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/tables', parameters('WorkspaceName'), variables('tableName'))]"
+      ],
+      "properties": {
+        "streamDeclarations": { "Custom-MDETVM_CL": { "columns": "[variables('streamSchema')]" } },
+        "destinations": {
+          "logAnalytics": [
+            { "workspaceResourceId": "[variables('workspaceResourceId')]", "name": "sentinel" }
+          ]
+        },
+        "dataFlows": [
+          {
+            "streams": [ "Custom-MDETVM_CL" ],
+            "destinations": [ "sentinel" ],
+            "transformKql": "source | extend TimeGenerated = now(), cvssScore = todouble(cvssScore)",
+            "outputStream": "Custom-MDETVM_CL"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2017-07-01",
+      "name": "[parameters('PlaybookName')]",
+      "location": "[resourceGroup().location]",
+      "tags": { "hidden-SentinelTemplateName": "MDETVM", "hidden-SentinelTemplateVersion": "3.0" },
+      "identity": { "type": "SystemAssigned" },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName'))]"
+      ],
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "DcrLogsIngestionEndpoint": { "defaultValue": "", "type": "String" },
+            "DcrImmutableId": { "defaultValue": "", "type": "String" },
+            "MdeApiBaseUrl": { "defaultValue": "", "type": "String" },
+            "MdeApiAudience": { "defaultValue": "", "type": "String" }
+          },
+          "triggers": {
+            "Recurrence": {
+              "type": "Recurrence",
+              "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "schedule": { "hours": [ "1" ], "minutes": [ 0 ] },
+                "timeZone": "Pacific Standard Time"
+              }
+            }
+          },
+          "actions": {
+            "Initialize_NextLink": {
+              "runAfter": {},
+              "type": "InitializeVariable",
+              "inputs": { "variables": [ { "name": "nextLink", "type": "string", "value": "@{concat(parameters('MdeApiBaseUrl'), '/api/machines/SoftwareVulnerabilitiesByMachine?pageSize=50000')}" } ] }
+            },
+            "Initialize_PageRows": {
+              "runAfter": { "Initialize_NextLink": [ "Succeeded" ] },
+              "type": "InitializeVariable",
+              "inputs": { "variables": [ { "name": "pageRows", "type": "array", "value": [] } ] }
+            },
+            "Initialize_PageTotalRows": {
+              "runAfter": { "Initialize_PageRows": [ "Succeeded" ] },
+              "type": "InitializeVariable",
+              "inputs": { "variables": [ { "name": "pageTotalRows", "type": "integer", "value": 0 } ] }
+            },
+            "Initialize_BatchIndex": {
+              "runAfter": { "Initialize_PageTotalRows": [ "Succeeded" ] },
+              "type": "InitializeVariable",
+              "inputs": { "variables": [ { "name": "batchIndex", "type": "integer", "value": 0 } ] }
+            },
+            "Page_Loop": {
+              "runAfter": { "Initialize_BatchIndex": [ "Succeeded" ] },
+              "type": "Until",
+              "expression": "@empty(variables('nextLink'))",
+              "limit": { "count": 200, "timeout": "PT2H" },
+              "actions": {
+                "Get_MDVM_Page": {
+                  "type": "Http",
+                  "inputs": {
+                    "method": "GET",
+                    "uri": "@variables('nextLink')",
+                    "authentication": { "type": "ManagedServiceIdentity", "audience": "@{parameters('MdeApiAudience')}" }
+                  }
+                },
+                "Project_Page_Rows": {
+                  "runAfter": { "Get_MDVM_Page": [ "Succeeded" ] },
+                  "type": "Select",
+                  "inputs": {
+                    "from": "@coalesce(body('Get_MDVM_Page')?['value'], json('[]'))",
+                    "select": {
+                      "TimeGenerated": "@utcNow()",
+                      "id": "@{coalesce(item()?['id'], '')}",
+                      "deviceId": "@{coalesce(item()?['deviceId'], '')}",
+                      "rbacGroupId": 0,
+                      "rbacGroupName": "@{coalesce(item()?['rbacGroupName'], '')}",
+                      "deviceName": "@{coalesce(item()?['deviceName'], '')}",
+                      "osPlatform": "@{coalesce(item()?['osPlatform'], '')}",
+                      "osVersion": "@{coalesce(item()?['osVersion'], '')}",
+                      "osArchitecture": "@{coalesce(item()?['osArchitecture'], '')}",
+                      "softwareVendor": "@{coalesce(item()?['softwareVendor'], '')}",
+                      "softwareName": "@{coalesce(item()?['softwareName'], '')}",
+                      "softwareVersion": "@{coalesce(item()?['softwareVersion'], '')}",
+                      "cveId": "@{coalesce(item()?['cveId'], '')}",
+                      "vulnerabilitySeverityLevel": "@{coalesce(item()?['vulnerabilitySeverityLevel'], '')}",
+                      "recommendedSecurityUpdate": "@{coalesce(item()?['recommendedSecurityUpdate'], '')}",
+                      "recommendedSecurityUpdateId": "@{coalesce(item()?['recommendedSecurityUpdateId'], '')}",
+                      "recommendedSecurityUpdateUrl": "@{coalesce(item()?['recommendedSecurityUpdateUrl'], '')}",
+                      "diskPaths": "@{string(coalesce(item()?['diskPaths'], json('[]')))}",
+                      "registryPaths": "@{string(coalesce(item()?['registryPaths'], json('[]')))}",
+                      "lastSeenTimestamp": "@{coalesce(item()?['lastSeenTimestamp'], '')}",
+                      "firstSeenTimestamp": "@{coalesce(item()?['firstSeenTimestamp'], '')}",
+                      "endOfSupportStatus": "",
+                      "endOfSupportDate": "",
+                      "exploitabilityLevel": "@{coalesce(item()?['exploitabilityLevel'], '')}",
+                      "recommendationReference": "@{coalesce(item()?['recommendationReference'], '')}",
+                      "cvssScore": "@{string(coalesce(item()?['cvssScore'], 0))}",
+                      "securityUpdateAvailable": "@{string(coalesce(item()?['securityUpdateAvailable'], false))}",
+                      "cveMitigationStatus": ""
+                    }
+                  }
+                },
+                "Set_PageRows": {
+                  "runAfter": { "Project_Page_Rows": [ "Succeeded" ] },
+                  "type": "SetVariable",
+                  "inputs": { "name": "pageRows", "value": "@body('Project_Page_Rows')" }
+                },
+                "Set_PageTotalRows": {
+                  "runAfter": { "Set_PageRows": [ "Succeeded" ] },
+                  "type": "SetVariable",
+                  "inputs": { "name": "pageTotalRows", "value": "@length(variables('pageRows'))" }
+                },
+                "Reset_BatchIndex": {
+                  "runAfter": { "Set_PageTotalRows": [ "Succeeded" ] },
+                  "type": "SetVariable",
+                  "inputs": { "name": "batchIndex", "value": 0 }
+                },
+                "Send_Page_Batched": {
+                  "runAfter": { "Reset_BatchIndex": [ "Succeeded" ] },
+                  "type": "Until",
+                  "expression": "@greaterOrEquals(variables('batchIndex'), variables('pageTotalRows'))",
+                  "limit": { "count": 200, "timeout": "PT1H" },
+                  "actions": {
+                    "Get_Batch": {
+                      "type": "Compose",
+                      "inputs": "@take(skip(variables('pageRows'), variables('batchIndex')), 500)"
+                    },
+                    "Send_Batch_To_DCR": {
+                      "runAfter": { "Get_Batch": [ "Succeeded" ] },
+                      "type": "Http",
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@{parameters('DcrLogsIngestionEndpoint')}/dataCollectionRules/@{parameters('DcrImmutableId')}/streams/Custom-MDETVM_CL?api-version=2023-01-01",
+                        "headers": { "Content-Type": "application/json" },
+                        "body": "@outputs('Get_Batch')",
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "https://monitor.azure.com" }
+                      }
+                    },
+                    "Increment_BatchIndex": {
+                      "runAfter": { "Send_Batch_To_DCR": [ "Succeeded" ] },
+                      "type": "IncrementVariable",
+                      "inputs": { "name": "batchIndex", "value": 500 }
+                    }
+                  }
+                },
+                "Set_NextLink": {
+                  "runAfter": { "Send_Page_Batched": [ "Succeeded" ] },
+                  "type": "SetVariable",
+                  "inputs": { "name": "nextLink", "value": "@{coalesce(body('Get_MDVM_Page')?['@odata.nextLink'], '')}" }
+                }
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {
+          "DcrLogsIngestionEndpoint": {
+            "value": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName')), '2023-03-11').endpoints.logsIngestion]"
+          },
+          "DcrImmutableId": {
+            "value": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName')), '2023-03-11').immutableId]"
+          },
+          "MdeApiBaseUrl": {
+            "value": "[parameters('MdeApiBaseUrl')]"
+          },
+          "MdeApiAudience": {
+            "value": "[parameters('MdeApiAudience')]"
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "logicAppPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Logic/workflows', parameters('PlaybookName')), '2017-07-01', 'Full').identity.principalId]"
+    },
+    "logicAppName": { "type": "string", "value": "[parameters('PlaybookName')]" },
+    "dcrName": { "type": "string", "value": "[variables('dcrName')]" },
+    "dcrImmutableId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName')), '2023-03-11').immutableId]"
+    },
+    "dcrLogsIngestionEndpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', variables('dcrName')), '2023-03-11').endpoints.logsIngestion]"
+    }
+  }
+}

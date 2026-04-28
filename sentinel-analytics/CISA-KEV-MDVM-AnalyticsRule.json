@@ -1,0 +1,81 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workspace": {
+            "type": "String"
+        }
+    },
+    "resources": [
+        {
+            "id": "[concat(resourceId('Microsoft.OperationalInsights/workspaces/providers', parameters('workspace'), 'Microsoft.SecurityInsights'),'/alertRules/c3f4a812-9e2b-4d71-b85a-6e7c1d3f20a9')]",
+            "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/c3f4a812-9e2b-4d71-b85a-6e7c1d3f20a9')]",
+            "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+            "kind": "Scheduled",
+            "apiVersion": "2023-12-01-preview",
+            "properties": {
+                "displayName": "CISA KEV Detected on Device - MDVM Correlation (DISABLED - hunting only)",
+                "description": "DISABLED BY DESIGN. MDVM already surfaces CISA KEV-tagged CVEs in its built-in recommendations dashboard, so this rule does not need to generate Sentinel incidents. The KQL is preserved for ad-hoc hunting, workbook reuse, and as a turn-key option if a future deployment wants paging-grade KEV alerts. To re-enable: set 'enabled' to true and 'incidentConfiguration.createIncident' to true. Credits: Cyberlorians (TVM ingestion pattern) and Matt Zorich / kqlquery.com (KEV correlation).",
+                "severity": "Informational",
+                "enabled": false,
+                "query": "let PreviousIncidents = SecurityIncident\n    | where TimeGenerated > ago(90d)\n    | where Title has_all (\"CVE-\", \"CISA KEV\")\n    | distinct Title;\nlet ActiveExceptions = materialize(\n    union isfuzzy=true\n        (_GetWatchlist('KEV-Exceptions')\n            | extend Exp = todatetime(tostring(ExpirationDate))\n            | where isnull(Exp) or Exp > now()\n            | extend ExceptionKey = strcat(tostring(DeviceName), '|', tostring(CveId))\n            | project ExceptionKey),\n        (datatable(ExceptionKey:string)[])\n    | distinct ExceptionKey\n);\nlet CISA_KEV = externaldata(\n    cveID: string,\n    vendorProject: string,\n    product: string,\n    vulnerabilityName: string,\n    dateAdded: datetime,\n    shortDescription: string,\n    requiredAction: string,\n    dueDate: datetime,\n    knownRansomwareCampaignUse: string,\n    notes: string)\n    [@\"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv\"]\n    with (format=\"csv\", ignoreFirstRecord=True);\nMDETVM_CL\n| where TimeGenerated > ago(2d)\n| project\n    TimeGenerated,\n    DeviceName = deviceName,\n    CVEId = cveId,\n    OsPlatform = osPlatform,\n    OsVersion = osVersion,\n    SoftwareName = softwareName,\n    SoftwareVendor = softwareVendor,\n    SoftwareVersion = softwareVersion,\n    Severity = vulnerabilitySeverityLevel,\n    CvssScore = cvssScore,\n    ExploitabilityLevel = exploitabilityLevel,\n    SecurityUpdateAvailable = securityUpdateAvailable,\n    RecommendedUpdate = recommendedSecurityUpdate\n| extend ExceptionKey = strcat(DeviceName, '|', CVEId)\n| where ExceptionKey !in (ActiveExceptions)\n| join kind=inner (CISA_KEV) on $left.CVEId == $right.cveID\n| extend DueDateInDays = datetime_diff('day', dueDate, now())\n| extend IsRansomware = knownRansomwareCampaignUse != \"Unknown\"\n| extend IncidentTitle = strcat(CVEId, \" - CISA KEV Detected on \", DeviceName)\n| where IncidentTitle !in (PreviousIncidents)\n| project\n    TimeGenerated,\n    DeviceName,\n    CVEId,\n    OsPlatform,\n    OsVersion,\n    SoftwareName,\n    SoftwareVendor,\n    SoftwareVersion,\n    Severity,\n    CvssScore,\n    ExploitabilityLevel,\n    SecurityUpdateAvailable,\n    RecommendedUpdate,\n    vendorProject,\n    product,\n    vulnerabilityName,\n    dateAdded,\n    requiredAction,\n    dueDate,\n    DueDateInDays,\n    IsRansomware,\n    knownRansomwareCampaignUse,\n    shortDescription",
+                "queryFrequency": "PT1H",
+                "queryPeriod": "P1D",
+                "triggerOperator": "GreaterThan",
+                "triggerThreshold": 0,
+                "suppressionDuration": "PT5H",
+                "suppressionEnabled": false,
+                "startTimeUtc": null,
+                "tactics": [
+                    "InitialAccess"
+                ],
+                "techniques": [
+                    "T1190"
+                ],
+                "alertRuleTemplateName": null,
+                "incidentConfiguration": {
+                    "createIncident": false,
+                    "groupingConfiguration": {
+                        "enabled": true,
+                        "reopenClosedIncident": false,
+                        "lookbackDuration": "P1D",
+                        "matchingMethod": "Selected",
+                        "groupByEntities": [],
+                        "groupByAlertDetails": [
+                            "DisplayName"
+                        ],
+                        "groupByCustomDetails": []
+                    }
+                },
+                "eventGroupingSettings": {
+                    "aggregationKind": "AlertPerResult"
+                },
+                "alertDetailsOverride": {
+                    "alertDisplayNameFormat": "{{CVEId}} - CISA KEV Detected on {{DeviceName}}",
+                    "alertDescriptionFormat": "CVE **{{CVEId}}** was added to the CISA KEV catalog and is active on **{{DeviceName}}**. Check custom details for full context.",
+                    "alertDynamicProperties": []
+                },
+                "customDetails": {
+                    "CVE_ID": "CVEId",
+                    "Device_Name": "DeviceName",
+                    "Software": "SoftwareName",
+                    "Severity": "Severity",
+                    "CVSS_Score": "CvssScore",
+                    "Required_Action": "requiredAction",
+                    "Due_Date": "dueDate",
+                    "Days_Until_Due": "DueDateInDays",
+                    "Ransomware_Use": "knownRansomwareCampaignUse",
+                    "Update_Available": "SecurityUpdateAvailable"
+                },
+                "entityMappings": null,
+                "sentinelEntitiesMappings": [
+                    {
+                        "columnName": "CVEId"
+                    }
+                ],
+                "templateVersion": null,
+                "subTechniques": []
+            }
+        }
+    ]
+}

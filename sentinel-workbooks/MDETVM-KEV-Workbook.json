@@ -1,0 +1,347 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "title": "CISA KEV to MDVM Findings Correlation Workbook",
+    "description": "Maps CISA Known Exploited Vulnerabilities to active MDE Threat & Vulnerability Management findings in the tenant. Surfaces which actively exploited CVEs exist on which devices and tracks remediation progress."
+  },
+  "parameters": {
+    "workspaceId": {
+      "type": "String",
+      "metadata": {
+        "description": "Full resource ID of the Log Analytics / Sentinel workspace that hosts MDETVM_CL."
+      }
+    },
+    "WorkbookDisplayName": {
+      "type": "String",
+      "defaultValue": "CISA KEV to MDVM Findings Correlation"
+    },
+    "Location": {
+      "type": "String",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Region for the workbook. MUST match the Sentinel workspace region or it will not appear in the Sentinel/Monitor Workbooks UI."
+      }
+    }
+  },
+  "variables": {
+    "workbookContent": {
+      "version": "Notebook/1.0",
+      "items": [
+        {
+          "type": 1,
+          "content": {
+            "json": "# CISA KEV to MDVM Findings Correlation\n\nCorrelates CISA's [Known Exploited Vulnerabilities (KEV) catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) — CVEs confirmed to be actively exploited in the wild — against live Microsoft Defender Vulnerability Management (MDVM) findings from every onboarded device in the tenant.\n\nUse this workbook to:\n- See exactly **which KEV CVEs are present on which devices right now**, with the CVE name, affected software, CVSS score, and CISA-mandated remediation due date.\n- Prioritize patching by **ransomware association** (CVEs CISA flags as used in known ransomware campaigns) and by **BOD 22-01 due date** (Past Due / Due < 14d).\n- Identify the **most exposed devices** and the **software products driving the most KEV exposure**, so remediation effort lands where it removes the most risk.\n\n**Data pipeline:** MDE agent → Microsoft Defender Vulnerability Management API → Logic App (`MDETVM`, daily 02:00 UTC, paginated via `@odata.nextLink`) → Data Collection Rule → `MDETVM_CL` (Log Analytics). Native MDVM `firstSeenTimestamp` and `lastSeenTimestamp` are preserved alongside ingestion `TimeGenerated`."
+          }
+        },
+        {
+          "type": 11,
+          "content": {
+            "version": "LinkItem/1.0",
+            "style": "tabs",
+            "links": [
+              {
+                "id": "kev-tab",
+                "cellValue": "tab",
+                "linkTarget": "parameter",
+                "linkLabel": "KEV Exposure",
+                "subTarget": "kev",
+                "preText": "",
+                "style": "link"
+              }
+            ]
+          },
+          "name": "tabs"
+        },
+        {
+          "type": 9,
+          "content": {
+            "version": "KqlParameterItem/1.0",
+            "parameters": [
+              {
+                "id": "timerange",
+                "version": "KqlParameterItem/1.0",
+                "name": "TimeRange",
+                "label": "Time range",
+                "type": 4,
+                "value": {
+                  "durationMs": 2592000000
+                },
+                "typeSettings": {
+                  "selectableValues": [
+                    {
+                      "durationMs": 86400000
+                    },
+                    {
+                      "durationMs": 604800000
+                    },
+                    {
+                      "durationMs": 2592000000
+                    },
+                    {
+                      "durationMs": 7776000000
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "deviceName-param",
+                "version": "KqlParameterItem/1.0",
+                "name": "DeviceName",
+                "label": "Device",
+                "type": 2,
+                "isRequired": true,
+                "multiSelect": true,
+                "quote": "'",
+                "delimiter": ",",
+                "query": "MDETVM_CL\n| where TimeGenerated > ago(2d)\n| distinct deviceName\n| order by deviceName asc",
+                "typeSettings": {
+                  "additionalResourceOptions": [
+                    "value::all"
+                  ],
+                  "showDefault": false
+                },
+                "queryType": 0,
+                "resourceType": "microsoft.operationalinsights/workspaces",
+                "value": [
+                  "value::all"
+                ]
+              },
+              {
+                "id": "cveId-param",
+                "version": "KqlParameterItem/1.0",
+                "name": "CveId",
+                "label": "CVE ID",
+                "type": 2,
+                "isRequired": true,
+                "multiSelect": true,
+                "quote": "'",
+                "delimiter": ",",
+                "query": "MDETVM_CL\n| where TimeGenerated > ago(2d)\n| distinct cveId\n| order by cveId asc",
+                "typeSettings": {
+                  "additionalResourceOptions": [
+                    "value::all"
+                  ],
+                  "showDefault": false
+                },
+                "queryType": 0,
+                "resourceType": "microsoft.operationalinsights/workspaces",
+                "value": [
+                  "value::all"
+                ]
+              },
+              {
+                "id": "vulnName-param",
+                "version": "KqlParameterItem/1.0",
+                "name": "VulnerabilityName",
+                "label": "Vulnerability name (CISA)",
+                "type": 2,
+                "isRequired": true,
+                "multiSelect": true,
+                "quote": "'",
+                "delimiter": ",",
+                "query": "let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=True);\nMDETVM_CL\n| where TimeGenerated > ago(2d)\n| distinct cveId\n| join kind=inner (CISA_KEV) on $left.cveId == $right.cveID\n| distinct vulnerabilityName\n| order by vulnerabilityName asc",
+                "typeSettings": {
+                  "additionalResourceOptions": [
+                    "value::all"
+                  ],
+                  "showDefault": false
+                },
+                "queryType": 0,
+                "resourceType": "microsoft.operationalinsights/workspaces",
+                "value": [
+                  "value::all"
+                ]
+              },
+              {
+                "id": "vendor-param",
+                "version": "KqlParameterItem/1.0",
+                "name": "VendorProject",
+                "label": "Vendor (CISA)",
+                "type": 2,
+                "isRequired": true,
+                "multiSelect": true,
+                "quote": "'",
+                "delimiter": ",",
+                "query": "let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=True);\nMDETVM_CL\n| where TimeGenerated > ago(2d)\n| distinct cveId\n| join kind=inner (CISA_KEV) on $left.cveId == $right.cveID\n| distinct vendorProject\n| order by vendorProject asc",
+                "typeSettings": {
+                  "additionalResourceOptions": [
+                    "value::all"
+                  ],
+                  "showDefault": false
+                },
+                "queryType": 0,
+                "resourceType": "microsoft.operationalinsights/workspaces",
+                "value": [
+                  "value::all"
+                ]
+              },
+              {
+                "id": "product-param",
+                "version": "KqlParameterItem/1.0",
+                "name": "Product",
+                "label": "Product (CISA)",
+                "type": 2,
+                "isRequired": true,
+                "multiSelect": true,
+                "quote": "'",
+                "delimiter": ",",
+                "query": "let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=True);\nMDETVM_CL\n| where TimeGenerated > ago(2d)\n| distinct cveId\n| join kind=inner (CISA_KEV) on $left.cveId == $right.cveID\n| distinct product\n| order by product asc",
+                "typeSettings": {
+                  "additionalResourceOptions": [
+                    "value::all"
+                  ],
+                  "showDefault": false
+                },
+                "queryType": 0,
+                "resourceType": "microsoft.operationalinsights/workspaces",
+                "value": [
+                  "value::all"
+                ]
+              }
+            ]
+          },
+          "name": "params"
+        },
+        {
+          "type": 1,
+          "content": {
+            "json": "## KEV Exposure Summary"
+          },
+          "conditionalVisibility": {
+            "parameterName": "tab",
+            "comparison": "isEqualTo",
+            "value": "kev"
+          }
+        },
+        {
+          "type": 3,
+          "content": {
+            "version": "KqlItem/1.0",
+            "query": "let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=True);\nlet KEV = MDETVM_CL\n  | where TimeGenerated > ago(2d)\n  | summarize arg_max(TimeGenerated, *) by cveId, deviceName\n  | where deviceName in ({DeviceName}) or '*' in ({DeviceName})\n  | where cveId in ({CveId}) or '*' in ({CveId})\n  | join kind=inner (CISA_KEV) on $left.cveId == $right.cveID\n  | where vulnerabilityName in ({VulnerabilityName}) or '*' in ({VulnerabilityName})\n  | where vendorProject in ({VendorProject}) or '*' in ({VendorProject})\n  | where product in ({Product}) or '*' in ({Product});\nlet Stats = KEV\n  | summarize\n      KEVMatches      = count(),\n      UniqueCVEs      = dcount(cveId),\n      AffectedDevices = dcount(deviceName),\n      RansomwareCVEs  = dcountif(cveId, knownRansomwareCampaignUse != 'Unknown'),\n      PastDue         = countif(dueDate < now());\nStats\n| mv-expand\n    Metric = pack_array('KEV Matches','Unique CVEs','Affected Devices','Ransomware CVEs','Past Due') to typeof(string),\n    Value  = pack_array(KEVMatches, UniqueCVEs, AffectedDevices, RansomwareCVEs, PastDue) to typeof(long)\n| project Metric, Value",
+            "size": 4,
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "tiles",
+            "tileSettings": {
+              "titleContent": {
+                "columnMatch": "Metric",
+                "formatter": 1
+              },
+              "leftContent": {
+                "columnMatch": "Value",
+                "formatter": 12,
+                "formatOptions": {
+                  "palette": "auto"
+                }
+              },
+              "showBorder": true,
+              "size": "auto"
+            }
+          },
+          "conditionalVisibility": {
+            "parameterName": "tab",
+            "comparison": "isEqualTo",
+            "value": "kev"
+          },
+          "name": "kev-tiles"
+        },
+        {
+          "type": 3,
+          "content": {
+            "version": "KqlItem/1.0",
+            "query": "let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=True);\nMDETVM_CL\n| where TimeGenerated > ago(2d)\n| summarize arg_max(TimeGenerated, *) by cveId, deviceName\n| where deviceName in ({DeviceName}) or '*' in ({DeviceName})\n| where cveId in ({CveId}) or '*' in ({CveId})\n| join kind=inner (CISA_KEV) on $left.cveId == $right.cveID\n| where vulnerabilityName in ({VulnerabilityName}) or '*' in ({VulnerabilityName})\n| where vendorProject in ({VendorProject}) or '*' in ({VendorProject})\n| where product in ({Product}) or '*' in ({Product})\n| extend DaysUntilDue = datetime_diff('day', dueDate, now())\n| extend DueStatus = case(DaysUntilDue < 0, 'Past Due', DaysUntilDue < 14, 'Due < 14d', 'Due > 14d')\n| sort by DueStatus asc, cvssScore desc\n| project ['Device Name'] = deviceName, ['CVE ID'] = cveId, Vulnerability = vulnerabilityName, Description = shortDescription, Vendor = vendorProject, Product = product, Software = softwareName, Version = softwareVersion, Severity = vulnerabilitySeverityLevel, ['CVSS Score'] = cvssScore, ['Ransomware Use'] = knownRansomwareCampaignUse, ['Due Date'] = dueDate, ['Due Status'] = DueStatus, ['Recommended Update'] = recommendedSecurityUpdate, ['Update Available'] = securityUpdateAvailable",
+            "size": 0,
+            "title": "Active KEV findings (all devices)",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "table",
+            "gridSettings": {
+              "formatters": [
+                {
+                  "columnMatch": "cvssScore",
+                  "formatter": 8,
+                  "formatOptions": {
+                    "palette": "redGreen",
+                    "min": 0,
+                    "max": 10
+                  }
+                },
+                {
+                  "columnMatch": "DueStatus",
+                  "formatter": 11
+                },
+                {
+                  "columnMatch": "vulnerabilitySeverityLevel",
+                  "formatter": 11
+                }
+              ]
+            }
+          },
+          "conditionalVisibility": {
+            "parameterName": "tab",
+            "comparison": "isEqualTo",
+            "value": "kev"
+          },
+          "name": "kev-findings"
+        },
+        {
+          "type": 3,
+          "content": {
+            "version": "KqlItem/1.0",
+            "query": "let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=True);\nMDETVM_CL\n| where TimeGenerated > ago(2d)\n| summarize arg_max(TimeGenerated, *) by cveId, deviceName\n| where deviceName in ({DeviceName}) or '*' in ({DeviceName})\n| where cveId in ({CveId}) or '*' in ({CveId})\n| join kind=inner (CISA_KEV) on $left.cveId == $right.cveID\n| where vulnerabilityName in ({VulnerabilityName}) or '*' in ({VulnerabilityName})\n| where vendorProject in ({VendorProject}) or '*' in ({VendorProject})\n| where product in ({Product}) or '*' in ({Product})\n| summarize ['KEV Count'] = dcount(cveId) by ['Device Name'] = deviceName\n| top 10 by ['KEV Count'] desc",
+            "size": 0,
+            "title": "Top 10 devices by KEV count",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "barchart"
+          },
+          "conditionalVisibility": {
+            "parameterName": "tab",
+            "comparison": "isEqualTo",
+            "value": "kev"
+          },
+          "customWidth": "50",
+          "name": "kev-topdevices"
+        },
+        {
+          "type": 3,
+          "content": {
+            "version": "KqlItem/1.0",
+            "query": "let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=True);\nMDETVM_CL\n| where TimeGenerated > ago(2d)\n| summarize arg_max(TimeGenerated, *) by cveId, deviceName\n| where deviceName in ({DeviceName}) or '*' in ({DeviceName})\n| where cveId in ({CveId}) or '*' in ({CveId})\n| join kind=inner (CISA_KEV) on $left.cveId == $right.cveID\n| where vulnerabilityName in ({VulnerabilityName}) or '*' in ({VulnerabilityName})\n| where vendorProject in ({VendorProject}) or '*' in ({VendorProject})\n| where product in ({Product}) or '*' in ({Product})\n| summarize Count = count() by Software = softwareName\n| top 10 by Count desc",
+            "size": 0,
+            "title": "Top 10 software products by KEV count",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "visualization": "piechart"
+          },
+          "conditionalVisibility": {
+            "parameterName": "tab",
+            "comparison": "isEqualTo",
+            "value": "kev"
+          },
+          "customWidth": "50",
+          "name": "kev-topsoftware"
+        }
+      ],
+      "fromTemplateId": "mdetvm-kev-correlation-workbook",
+      "styleSettings": {}
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Insights/workbooks",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceGroup().id, 'mdetvm-kev-correlation-workbook')]",
+      "location": "[parameters('Location')]",
+      "kind": "shared",
+      "properties": {
+        "displayName": "[parameters('WorkbookDisplayName')]",
+        "serializedData": "[string(variables('workbookContent'))]",
+        "version": "1.0",
+        "sourceId": "[parameters('workspaceId')]",
+        "category": "sentinel"
+      }
+    }
+  ]
+}
