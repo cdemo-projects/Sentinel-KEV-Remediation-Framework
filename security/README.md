@@ -14,14 +14,15 @@ The two scripts in this folder cover **tenant-level controls** that ARM template
 
 | Script | Required? | What It Does |
 |---|---|---|
-| `Lock-MailSendScope.ps1` | **Required for prod** | Creates a dedicated shared mailbox + Exchange Application Access Policy that restricts the Logic App's `Mail.Send` permission to ONE mailbox instead of tenant-wide |
+| `Lock-MailSendScope-RBAC.ps1` | **Recommended for new deployments** | Uses Exchange Online RBAC for Applications (the modern model) to scope `Mail.Send` to ONE mailbox via Management Scope + role assignment |
+| `Lock-MailSendScope.ps1` | Legacy fallback | Uses Application Access Policy (deprecated by Microsoft — still works, but slated for migration). Use only if RBAC for Apps isn't available in your cloud. |
 | `Move-TeamsWebhookToKeyVault.ps1` | Optional | Moves the Teams webhook URL from a Logic App SecureString parameter into Azure Key Vault. Only run if you use Teams notifications. |
 
 ## Why These Aren't Auto-Deployed
 
 | Script | Why Manual |
 |---|---|
-| `Lock-MailSendScope.ps1` | Touches Exchange Online (different API/permission model than Azure ARM). Requires Exchange Administrator role. |
+| `Lock-MailSendScope-RBAC.ps1` / `Lock-MailSendScope.ps1` | Touches Exchange Online (different API/permission model than Azure ARM). Requires Exchange Administrator or Organization Management role. |
 | `Move-TeamsWebhookToKeyVault.ps1` | Needs the actual webhook URL value (which doesn't exist at template-deploy time) AND requires RG Owner to grant the MI Key Vault RBAC. |
 
 ## Order of Operations
@@ -29,8 +30,8 @@ The two scripts in this folder cover **tenant-level controls** that ARM template
 After running the base Quick Start (Options 1+2+3 from the root README):
 
 ```powershell
-# 1. Required: lock down Mail.Send scope (Exchange Admin)
-.\Lock-MailSendScope.ps1 -TenantDomain "<your-tenant-domain>"
+# 1. Required: lock down Mail.Send scope (Exchange Admin) - use the modern RBAC script
+.\Lock-MailSendScope-RBAC.ps1 -TenantDomain "<your-tenant-domain>"
 
 # 2. Optional: move webhook to Key Vault (RG Owner, only if using Teams)
 .\Move-TeamsWebhookToKeyVault.ps1 `
@@ -41,7 +42,7 @@ After running the base Quick Start (Options 1+2+3 from the root README):
 That's it. Three commands total to deploy the framework end-to-end with full hardening:
 
 1. Quick Start Options 1+2+3 (resources + analytics + remediation, all hardened by default)
-2. `Lock-MailSendScope.ps1` (Exchange Admin, one-time)
+2. `Lock-MailSendScope-RBAC.ps1` (Exchange Admin, one-time)
 3. `Move-TeamsWebhookToKeyVault.ps1` (RG Owner, optional)
 
 ## What Changed From the Earlier Pack

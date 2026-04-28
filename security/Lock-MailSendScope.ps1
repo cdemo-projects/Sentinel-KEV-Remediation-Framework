@@ -1,6 +1,20 @@
 <#
 .SYNOPSIS
-    Locks the KEV-Remediate Logic App's Mail.Send permission to a single mailbox.
+    [LEGACY] Locks the KEV-Remediate Logic App's Mail.Send permission to a single mailbox.
+
+.DEPRECATED
+    Microsoft is migrating Application Access Policies to Role Based Access Control
+    for Applications in Exchange Online. Per Microsoft Learn (verified Apr 2026):
+
+      "Don't create new App Access Policies as these policies will eventually require
+       migration to Role Based Access Control for Applications."
+
+    Source: https://learn.microsoft.com/exchange/permissions-exo/application-rbac
+
+    USE Lock-MailSendScope-RBAC.ps1 INSTEAD for new deployments. This script remains
+    available for tenants where RBAC for Apps cannot be used yet (e.g., specific gov
+    clouds where the feature has not rolled out). Both scripts produce equivalent
+    runtime behavior - the only difference is the underlying Exchange model.
 
 .DESCRIPTION
     Mail.Send is a tenant-wide application permission - by default, the Logic App's

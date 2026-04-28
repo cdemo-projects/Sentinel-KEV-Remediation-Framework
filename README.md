@@ -74,7 +74,8 @@ Sentinel-KEV-Remediation-Framework/
 
 └── security/                        ← Tenant-level hardening (run once per tenant)
     ├── README.md
-    ├── Lock-MailSendScope.ps1        ← Required (Exchange Admin)
+    ├── Lock-MailSendScope-RBAC.ps1   ← Recommended (Exchange Admin; modern RBAC for Apps)
+    ├── Lock-MailSendScope.ps1        ← Legacy fallback (Application Access Policy)
     └── Move-TeamsWebhookToKeyVault.ps1 ← Optional (RG Owner; only if using Teams)
 ```
 
@@ -231,7 +232,7 @@ Before the framework can do its job, your tenant should already be set up for th
 |---|---|---|
 | **No automated remediation for non-Intune devices** | MECM-only and unmanaged devices fall back to email + Teams notification — humans take action | Co-management or Intune MDM enrollment. For pure MECM shops: build an Automatic Deployment Rule that subscribes to the email notifications and pushes the patch via standard ConfigMgr application deployment. |
 | **Lab-only third-party install path** | The current `Update-KEVRemediateThirdPartyPath.ps1` script makes each device pull installers from sites like `github.com` and `7-zip.org` at runtime — fine for a lab tenant, not appropriate for prod or gov (no internet egress, no version tracking, breaks when vendor URLs change) | **Intune-automated third-party patching is fully supported — just use the right Intune feature.** Replace the script with **Intune Win32 app assignments** ([docs](https://learn.microsoft.com/intune/app-management/deployment/add-win32)). The Intune admin packages each app once (`.intunewin`); the Logic App calls Graph `POST /deviceAppManagement/mobileApps/{id}/assign` to push the app to affected devices. Intune handles delivery from its own CDN, supersedence (auto-uninstall old version), retries, and install-state tracking — all gov-safe. |
-| **Tenant-wide impersonation risk on `Mail.Send`** | Without scoping, the Logic App's managed identity can send mail as **any user** in the tenant | Run [`security/Lock-MailSendScope.ps1`](security/Lock-MailSendScope.ps1) to apply an Exchange Application Access Policy that restricts the MI to a single approved mailbox. |
+| **Tenant-wide impersonation risk on `Mail.Send`** | Without scoping, the Logic App's managed identity can send mail as **any user** in the tenant | Run [`security/Lock-MailSendScope-RBAC.ps1`](security/Lock-MailSendScope-RBAC.ps1) (modern RBAC for Apps) to scope the MI to a single approved mailbox. Legacy `Lock-MailSendScope.ps1` still works as a fallback. |
 | **No automated rollback for failed deployments** | A bad KB or installer requires the help desk to manually clean up | **Use a pilot ring** in Intune (small canary group) before broad deployment. Let the Logic App expedite to the pilot first; broad ring follows on its normal cadence. If the pilot fires alerts, pause the analytics rule before the broad ring picks it up. For driver issues, use Intune's **Pause** action on the driver update policy ([docs](https://learn.microsoft.com/intune/device-updates/windows/configure-driver-update-policy)). |
 | **Microsoft 365 Apps, Edge, drivers, and feature updates not auto-triggered** | Those CVEs stay open until their normal Intune policy runs | Configure the policies in the *Required Configuration per Update Type* table above. Specifically: turn on `Allow Microsoft product updates` in update rings, configure M365 Apps update channel via ODT or Cloud Update, leave Edge auto-update on (or use Autopatch), and create a Windows driver update policy. |
 
@@ -279,16 +280,7 @@ Before the framework can do its job, your tenant should already be set up for th
 | KEV Remediation | Logic App MI | `Mail.Send` | Graph API |
 | KEV Remediation | Logic App MI | `Windows Update Deployment Administrator` | Entra role |
 
-> ⚠️ **Security note on `Mail.Send`:** This application permission lets the managed identity send email as **any user** in the tenant. Scope it down with an Exchange Application Access Policy:
->
-> ```powershell
-> New-ApplicationAccessPolicy -AppId <logic-app-mi-app-id> `
->   -PolicyScopeGroupId <mail-security-group> `
->   -AccessRight RestrictAccess `
->   -Description "Restrict KEV-Remediate to send from approved address only"
-> ```
->
-> Create a mail-enabled security group containing only the approved sender address.
+> ⚠️ **Security note on `Mail.Send`:** This application permission lets the managed identity send email as **any user** in the tenant. **Required for prod:** scope it down with [`security/Lock-MailSendScope-RBAC.ps1`](security/Lock-MailSendScope-RBAC.ps1) (modern RBAC for Applications) or the legacy [`security/Lock-MailSendScope.ps1`](security/Lock-MailSendScope.ps1) fallback.
 
 ---
 
@@ -317,32 +309,33 @@ Before the framework can do its job, your tenant should already be set up for th
 
 ---
 
-## � Security Hardening
+## 🔒 Security Hardening
 
-The base deployment is functional but leaves five real risks in play. The [`security/`](security/) folder ships a hardening pack that closes each one.
+Most hardening is **baked into the base templates** — anyone running the Quick Start gets it for free, no extra steps.
 
-| Risk | Fix | File |
+### Auto-Deployed With Quick Start (No Extra Action)
+
+| Hardening | Where It Lives | What It Does |
 |---|---|---|
-| Tenant-wide `Mail.Send` impersonation | Exchange Application Access Policy scoped to one mailbox | [`Lock-MailSendScope.ps1`](security/Lock-MailSendScope.ps1) |
-| Logic App definition tampering | ReadOnly resource locks + diagnostic logging to Sentinel | [`Lock-KEVRemediateResources.ps1`](security/Lock-KEVRemediateResources.ps1) |
-| Teams webhook URL exposed via Logic App API | Move webhook to Key Vault with MI-only access | [`Move-TeamsWebhookToKeyVault.ps1`](security/Move-TeamsWebhookToKeyVault.ps1) |
-| Forged Sentinel incident triggers unauthorized expedite | Validate incident's source rule ID inside the Logic App | [`Patch-IncidentSourceValidation.ps1`](security/Patch-IncidentSourceValidation.ps1) |
-| AutoClose closes incidents on a single noisy snapshot | Require two consecutive clean snapshots + agent reporting check | [`Patch-AutoCloseTwoSnapshots.ps1`](security/Patch-AutoCloseTwoSnapshots.ps1) |
+| **Incident source validation** | `KEV-Remediate-LogicApp.json` (`Validate_Incident_Source` action) | Logic App refuses to run on incidents not from the approved CISA KEV analytics rule |
+| **Two-snapshot auto-close** | `AutoClose-KEVIncidents-LogicApp.json` | Requires two consecutive clean MDETVM snapshots + agent reporting check before closing an incident |
+| **ReadOnly resource locks** | Both Logic App ARM templates | Prevents tampering with the Logic App definitions without explicit lock removal |
+| **Diagnostic settings to Sentinel** | Both Logic App ARM templates | Ships `WorkflowRuntime` logs to the Sentinel workspace for the detection rules to query |
+| **Tampering detection** (4 rules) | `sentinel-analytics/Detect-*.json` | Sentinel rules for Logic App definition changes, MI closing non-KEV incidents, watchlist tampering, and Logic App run failures (ship **disabled** — review then enable) |
 
-Plus four detection rules that catch tampering and operational failures:
+### Manual Tenant-Level Steps (Required Once Per Tenant)
 
-| Detection | Triggers When | File |
-|---|---|---|
-| Logic App definition change | Someone edits `KEV-Remediate` or `AutoClose-KEVIncidents` workflow JSON | [`Detect-LogicAppDefinitionChange.json`](security/Detect-LogicAppDefinitionChange.json) |
-| MI closes a non-KEV incident | The Logic App's MI closes an incident that wasn't from the CISA KEV rule | [`Detect-MIClosedIncident.json`](security/Detect-MIClosedIncident.json) |
-| Watchlist tampering | KEV-Exceptions watchlist is created, modified, or has rows changed | [`Detect-WatchlistChange.json`](security/Detect-WatchlistChange.json) |
-| KEV-Remediate run failure | A KEV-Remediate Logic App run fails or is cancelled | [`Detect-KEVRemediateFailure.json`](security/Detect-KEVRemediateFailure.json) |
+| Step | Required? | Who Runs It | What It Does |
+|---|---|---|---|
+| [`security/Lock-MailSendScope-RBAC.ps1`](security/Lock-MailSendScope-RBAC.ps1) | **Recommended** | Exchange Administrator | Creates a dedicated mailbox + Management Scope + role assignment using **RBAC for Applications** (modern Exchange Online model) |
+| [`security/Lock-MailSendScope.ps1`](security/Lock-MailSendScope.ps1) | Legacy fallback | Exchange Administrator | Same outcome via legacy Application Access Policy. Use only where RBAC for Apps isn't available. |
+| [`security/Move-TeamsWebhookToKeyVault.ps1`](security/Move-TeamsWebhookToKeyVault.ps1) | Optional | RG Owner | Moves the Teams webhook URL into Key Vault with MI-only access. Only needed if you use Teams notifications. |
 
-All detection rules ship **disabled by default**. Review them, then enable in Sentinel → Analytics. Full risk → fix mapping and apply order in [`security/README.md`](security/README.md).
+These can't be deployed by ARM templates because they touch Exchange Online and require admin consent that lives outside the resource group. See [`security/README.md`](security/README.md) for full details.
 
 ---
 
-## �🙏 Credits
+## 🙏 Credits
 
 - **[Cyberlorians](https://github.com/Cyberlorians)** — Original MDETVM Logic App and TVM-to-Sentinel ingestion concept
 - **[Matt Zorich / kqlquery.com](https://kqlquery.com)** — CISA KEV correlation pattern using `externaldata()`
