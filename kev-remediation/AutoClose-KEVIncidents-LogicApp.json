@@ -2,8 +2,8 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "metadata": {
-    "title": "AutoClose-KEVIncidents - Daily auto-close of resolved KEV incidents (DISABLED)",
-    "description": "DISABLED BY DESIGN. Companion to CISA-KEV-MDVM-AnalyticsRule.json which is also disabled (MDVM already surfaces KEV-tagged CVEs in its built-in dashboard, so no Sentinel incidents are generated to auto-close). Logic App workflow is preserved at state=Disabled and can be re-enabled by setting properties.state to 'Enabled' if a future deployment turns the analytics rule back on.",
+    "title": "AutoClose-KEVIncidents - Daily auto-close of resolved KEV incidents",
+    "description": "Companion to the CISA KEV analytics rule. Runs daily, checks each open KEV incident against the latest MDETVM_CL snapshot, and auto-closes incidents where the CVE is no longer detected on the device. Deploys disabled by default. To enable: set properties.state to 'Enabled' and ensure the analytics rule is also enabled.",
     "prerequisites": "After deployment, grant the Logic App's managed identity the 'Microsoft Sentinel Responder' role scoped to the workspace, and 'Log Analytics Reader' on the subscription.",
     "postDeployment": [
       "Assign 'Microsoft Sentinel Responder' on the workspace to the Logic App MI",

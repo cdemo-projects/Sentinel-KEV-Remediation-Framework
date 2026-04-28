@@ -62,8 +62,8 @@
       "kind": "Scheduled",
       "apiVersion": "2023-12-01-preview",
       "properties": {
-        "displayName": "MDETVM Pipeline Health - Quiet KEV (DISABLED - rule no longer creates incidents)",
-        "description": "DISABLED BY DESIGN. The CISA KEV correlation analytics rule no longer creates incidents (MDVM already surfaces KEV CVEs in its built-in dashboard), so 'zero KEV alerts' is permanently true and not a useful health signal.",
+        "displayName": "MDETVM Pipeline Health - Quiet KEV",
+        "description": "Fires when the MDETVM pipeline is ingesting data but no KEV-matching alerts have been generated in 3 days. Deploys disabled by default. Enable this rule alongside the CISA KEV analytics rule to monitor detection health.",
         "severity": "Informational",
         "enabled": false,
         "query": "let RecentIngestion = union isfuzzy=true (MDETVM_CL | where TimeGenerated > ago(1d) | summarize Rows = count()), (datatable(Rows:long)[long(0)]) | summarize Rows = sum(Rows);\nlet RecentKEVAlerts = union isfuzzy=true (SecurityAlert | where TimeGenerated > ago(3d) | where AlertName has 'KEV' | summarize KEVAlerts = count()), (datatable(KEVAlerts:long)[long(0)]) | summarize KEVAlerts = sum(KEVAlerts);\nRecentIngestion\n| extend KEVAlerts = toscalar(RecentKEVAlerts | project KEVAlerts)\n| where Rows > 0 and KEVAlerts == 0\n| project Rows, KEVAlerts",
