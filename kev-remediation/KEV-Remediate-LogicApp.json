@@ -84,13 +84,6 @@
     "VerificationMaxAttempts": {
       "type": "int",
       "defaultValue": 6
-    },
-    "ExpectedAnalyticRuleId": {
-      "type": "string",
-      "defaultValue": "c3f4a812-9e2b-4d71-b85a-6e7c1d3f20a9",
-      "metadata": {
-        "description": "GUID of the analytics rule allowed to trigger this playbook. Defaults to the CISA-KEV-MDVM rule shipped in this repo. Incidents from any other rule will be Cancelled."
-      }
     }
   },
   "variables": {
@@ -1357,7 +1350,7 @@
                 "Terminate_Unauthorized_Trigger": {
                   "type": "Terminate",
                   "inputs": {
-                    "runStatus": "Cancelled",
+                    "runStatus": "Failed",
                     "runError": {
                       "code": "UnauthorizedTriggerSource",
                       "message": "Incident did not originate from the approved CISA KEV analytics rule. Refusing to remediate. See ExpectedAnalyticRuleId parameter."
@@ -1499,6 +1492,10 @@
             },
             "WorkspaceName": {
               "defaultValue": "<workspace-name>",
+              "type": "String"
+            },
+            "ExpectedAnalyticRuleId": {
+              "defaultValue": "c3f4a812-9e2b-4d71-b85a-6e7c1d3f20a9",
               "type": "String"
             }
           },
