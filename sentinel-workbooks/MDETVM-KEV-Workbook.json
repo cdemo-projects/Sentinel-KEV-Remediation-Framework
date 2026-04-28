@@ -335,7 +335,7 @@
         {
           "type": 1,
           "content": {
-            "json": "## All CVE Exposure\n\nAll vulnerabilities from MDETVM_CL across every device \u2014 not filtered to CISA KEVs."
+            "json": "### All CVE Exposure\nAll vulnerabilities from MDETVM_CL \u2014 not filtered to CISA KEVs."
           },
           "conditionalVisibility": {
             "parameterName": "tab",
@@ -412,7 +412,7 @@
           "type": 3,
           "content": {
             "version": "KqlItem/1.0",
-            "query": "let latestPerDevice = MDETVM_CL\n| summarize LatestTime = max(TimeGenerated) by deviceName;\nMDETVM_CL\n| join kind=inner latestPerDevice on deviceName\n| where TimeGenerated == LatestTime\n| project cveId, deviceName, softwareName, softwareVendor, vulnerabilitySeverityLevel, cvssV3=cvssV3_d, recommendedSecurityUpdateId, publicExploit=publicExploit_b, exploitTypes=exploitTypes_s\n| sort by cvssV3 desc, vulnerabilitySeverityLevel asc",
+            "query": "let latestPerDevice = MDETVM_CL\n| summarize LatestTime = max(TimeGenerated) by deviceName;\nMDETVM_CL\n| join kind=inner latestPerDevice on deviceName\n| where TimeGenerated == LatestTime\n| project cveId, deviceName, softwareName, softwareVendor, Severity=vulnerabilitySeverityLevel, CVSS=cvssScore, KB=recommendedSecurityUpdateId, Exploitability=exploitabilityLevel\n| sort by CVSS desc, Severity asc",
             "size": 0,
             "title": "All CVE Findings (Latest Snapshot)",
             "queryType": 0,
@@ -422,7 +422,7 @@
               "filter": true,
               "sortBy": [
                 {
-                  "itemKey": "cvssV3",
+                  "itemKey": "CVSS",
                   "sortOrder": 2
                 }
               ]
