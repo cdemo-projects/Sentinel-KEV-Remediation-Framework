@@ -1,19 +1,19 @@
-# Sentinel KEV Remediation Framework
+# 🛡️ Sentinel KEV Remediation Framework
 
 Modular solution for detecting and remediating [CISA Known Exploited Vulnerabilities (KEVs)](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) using Microsoft Defender Vulnerability Management (MDVM), Microsoft Sentinel, and Intune/WUfB.
 
 **Each component is independent.** Deploy only what you need:
 
-| Component | What it does | Requires |
+| Component | What It Does | Requires |
 |---|---|---|
 | **TVM Data Ingest** | Daily pipeline: MDE API → `MDETVM_CL` custom table in Sentinel | Sentinel, MDE P2 |
-| **Sentinel Analytics** | KQL rule correlates `MDETVM_CL` against CISA KEV catalog → incidents | TVM Data Ingest |
+| **Sentinel Analytics** | KQL rule correlates `MDETVM_CL` against the CISA KEV catalog → incidents | TVM Data Ingest |
 | **Sentinel Workbooks** | Visual dashboards for KEV exposure and remediation tracking | TVM Data Ingest |
 | **KEV Remediation** | SOAR playbook: auto-remediate via WUfB (Windows KBs) or Intune (third-party) | Sentinel Analytics + Intune |
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 ### Pipeline 1 · Data Ingest
 
@@ -33,12 +33,11 @@ Modular solution for detecting and remediating [CISA Known Exploited Vulnerabili
 
 ---
 
-## Repo Layout
+## 📁 Repo Layout
 
 ```text
 Sentinel-KEV-Remediation-Framework/
 ├── README.md
-├── DEPLOY-GUIDE.md
 ├── LICENSE
 │
 ├── tvm-data-ingest/                 ← Daily data pipeline (independent)
@@ -72,9 +71,9 @@ Sentinel-KEV-Remediation-Framework/
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
-### Option 1: Just the workbook (visibility only)
+### Option 1 — Workbook Only (Visibility)
 
 ```powershell
 # Deploy the data pipeline
@@ -92,7 +91,7 @@ az deployment group create -g <rg> `
   --parameters workspaceId=<workspace-resource-id>
 ```
 
-### Option 2: Detection + incidents (add alerting)
+### Option 2 — Detection + Incidents (Alerting)
 
 ```powershell
 # After Option 1, add the analytics rule
@@ -101,7 +100,7 @@ az deployment group create -g <rg> `
   --parameters workspace=<ws>
 ```
 
-### Option 3: Full automation (add remediation)
+### Option 3 — Full Automation (Remediation)
 
 ```powershell
 # After Option 2, deploy the remediation playbook
@@ -119,7 +118,7 @@ az deployment group create -g <rg> `
   --parameters WorkspaceName=<ws> PlaybookResourceId=<logic-app-resource-id>
 ```
 
-### Trigger the first data pull
+### Trigger the First Data Pull
 
 The MDETVM Logic App runs daily at **02:00 UTC**. To pull data immediately after deployment:
 
@@ -133,7 +132,7 @@ Or in the Portal: open the **MDETVM** Logic App → **Run Trigger** → **Recurr
 
 First run typically takes 5–20 minutes depending on environment size. Watch the run history for failures (HTTP 403 = permissions issue, re-run `Assign-MDVMPermissions.ps1`).
 
-### Verify data landed in `MDETVM_CL`
+### Verify Data Landed in `MDETVM_CL`
 
 Wait 10–15 minutes after the first successful run, then run this in **Sentinel → Logs**:
 
@@ -152,55 +151,55 @@ Expect `Devices > 0` and `UniqueCVEs > 0`. If the table doesn't exist, the Logic
 
 ---
 
-## About `MDETVM_CL`
+## 📊 About `MDETVM_CL`
 
-`MDETVM_CL` is a single custom Sentinel table containing data from two native Defender tables:
+`MDETVM_CL` is a single custom Sentinel table that flattens data from two native Defender tables:
 
-| Native Table | What it provides |
+| Native Table | What It Provides |
 |---|---|
 | `DeviceTvmSoftwareVulnerabilities` | CVEs per device, software info, recommended KB |
 | `DeviceTvmSoftwareVulnerabilitiesKB` | CVSS score, exploit availability, severity level |
 
-The MDE REST API returns this data flattened — no joins needed in Sentinel KQL.
+The MDE REST API returns this data pre-joined — no joins needed in Sentinel KQL.
 
 ---
 
-## How Patching Actually Works
+## 🔧 How Patching Actually Works
 
-This framework only **automates a slice** of patching. Most updates are still delivered by Intune / Windows Update for Business (WUfB) on their normal cadence. This section spells out exactly what this project does, what it doesn't do, and what your tenant must already have configured for the rest.
+This framework only **automates a slice** of patching. Most updates are still delivered by Intune / Windows Update for Business (WUfB) on their normal cadence. This section spells out exactly what the project does, what it doesn't do, and what your tenant must already have in place for the rest.
 
-### What this framework does
+### What This Framework Does
 
-| Update type | What this framework does | Underlying mechanism |
+| Update Type | What This Framework Does | Underlying Mechanism |
 |---|---|---|
 | **Windows quality updates (KBs)** | Expedites the KB to affected devices when a KEV is detected | Graph `windowsUpdates/deploymentAudiences` → `expedite` ([docs](https://learn.microsoft.com/graph/windowsupdates-deploy-expedited-update)) |
 | **Third-party apps (Intune-managed)** ⚠️ *Lab/POC only* | Triggers an on-demand proactive remediation script that downloads the vendor installer and runs it silently | Graph `deviceManagement/managedDevices/{id}/initiateOnDemandProactiveRemediation` |
 | **Third-party apps (MECM-managed)** | Sends an email + Teams notification with the CVE, devices, and required version. No automated push | Manual hand-off |
 
-> ⚠️ **The third-party Intune path is a reference implementation for non-prod environments only.** It pulls vendor installers from the public internet, which is not appropriate for production or government tenants. For prod, pair this framework with **Intune Win32 apps + supersedence** or **MECM application deployment** for third-party patching. See the *Known gaps* table below for details.
+> ⚠️ **The third-party Intune path is a reference implementation for non-prod environments only.** It pulls vendor installers from the public internet, which is not appropriate for production or government tenants. For prod, replace it with **Intune Win32 app assignments** (still automated from the Logic App via Graph) or **MECM application deployment**. See *Known Gaps* below for the full path forward.
 
-### What this framework does **not** do
+### What This Framework Does Not Do
 
-| Update type | Why not | Where it actually gets handled |
+| Update Type | Why Not | Where It Actually Gets Handled |
 |---|---|---|
 | **Windows feature updates** (e.g., 23H2 → 24H2) | No expedite API exists for feature updates ([Autopatch capabilities table](https://learn.microsoft.com/graph/windowsupdates-concept-overview#capabilities-of-windows-autopatch)) | Intune **Feature update policy** ([docs](https://learn.microsoft.com/intune/device-updates/windows/)) |
 | **Driver / firmware updates** | No expedite API exists for drivers (same capabilities table) | Intune **Windows driver update policy** ([docs](https://learn.microsoft.com/intune/device-updates/windows/manage-driver-updates)) |
 | **Microsoft 365 Apps (Office)** | Office uses Click-to-Run channels, not Windows Update | M365 Apps **update channels** + Office Deployment Tool / Cloud Update / Config Mgr ([docs](https://learn.microsoft.com/microsoft-365-apps/updates/overview-update-channels)) |
 | **Microsoft Edge** | Edge has its own updater (auto-updates by default) | Allow Edge to self-update **OR** manage via Autopatch / Edge Update policies ([docs](https://learn.microsoft.com/deployedge/microsoft-edge-update-policies)) |
 | **.NET Framework / Visual C++ runtimes** | These ride on Windows monthly cumulative updates | Already covered by your **Quality update ring** |
-| **Win32 LOB / non-Intune-managed apps** | No standard install method to call | Package as Win32 app with **supersedence** ([docs](https://learn.microsoft.com/intune/app-management/deployment/add-win32)) |
+| **Win32 LOB / non-Intune-managed apps** | No standard install method to call | Package as a Win32 app with **supersedence** ([docs](https://learn.microsoft.com/intune/app-management/deployment/add-win32)) |
 
-### Why a KEV can still be detected after Intune rings have done their job
+### Why KEVs Persist After Intune Rings Run
 
-- **Detection runs daily.** A device must check in, install the KB, and report back to MDE before MDVM stops flagging it. There's normally a 24–72 hour window where a KEV looks "open" even though the patch is already on the way.
-- **Patch may exist in the catalog before your ring deploys it.** Quality update rings ship in waves (pilot → broad). Devices in a later wave still show the CVE until their wave runs.
+- **Detection runs daily.** A device must check in, install the KB, and report back to MDE before MDVM stops flagging it. There's normally a 24–72 hour window where a KEV looks "open" even though the patch is on the way.
+- **Patches may exist in the catalog before your ring deploys them.** Quality update rings ship in waves (pilot → broad). Devices in a later wave still show the CVE until their wave runs.
 - **Ring deferral may exceed CISA due date.** CISA gives ~21 days for KEVs. If your broad ring is deferred 14 days plus a 7-day deadline, you'll miss the window for some devices unless you expedite — which is exactly what this framework does.
 
-### Configuration required per update type
+### Required Configuration per Update Type
 
 Before the framework can do its job, your tenant should already be set up for the categories below. None of this is created by the framework.
 
-| Update type | Required config | Where it lives |
+| Update Type | Required Configuration | Where It Lives |
 |---|---|---|
 | **Windows quality updates** | Update ring with `Allow Microsoft product updates = Allow` so .NET / Defender platform updates flow with the OS | Intune → Devices → Windows → Update rings |
 | **Windows feature updates** | Feature update policy pinned to the target version | Intune → Devices → Windows → Feature updates |
@@ -210,17 +209,17 @@ Before the framework can do its job, your tenant should already be set up for th
 | **Third-party apps (Intune)** | Devices Intune-MDM-enrolled + Intune Management Extension installed; vendor installers reachable from device | Intune → Devices |
 | **Third-party apps (MECM)** | Standard ConfigMgr application + supersedence rules | Configuration Manager |
 
-### Known gaps in this framework
+### Known Gaps
 
-| Gap | Impact | How to fix it |
+| Gap | Impact | How to Fix It |
 |---|---|---|
-| **Third-party path requires Intune MDM enrollment** | MECM-only or unmanaged devices fall back to email notification | Stand up co-management or move workloads to Intune. For pure MECM shops, build an Automatic Deployment Rule that subscribes to the email notifications and pushes the third-party patch via standard ConfigMgr application deployment. |
-| **Third-party installer script is lab/POC only** (`Update-KEVRemediateThirdPartyPath.ps1` downloads vendor installers from the public internet) | The current script makes each device pull installers from sites like `github.com` and `7-zip.org` at runtime — fine for a lab tenant, not appropriate for prod or gov (no internet egress, no version tracking, breaks when vendor URLs change) | **Intune-automated third-party patching is fully supported — just use the right Intune feature.** Replace the script with **Intune Win32 app assignments** ([docs](https://learn.microsoft.com/intune/app-management/deployment/add-win32)). Workflow stays automated: Intune admin packages each app once (`.intunewin`) and uploads it. The Logic App calls Graph `POST /deviceAppManagement/mobileApps/{id}/assign` to push the app to affected devices. Intune handles delivery from its own CDN, supersedence (auto-uninstall old version), retries, and install-state tracking — all gov-safe. |
-| **Email sender uses `Mail.Send` application permission** | Tenant-wide impersonation if not scoped | **Required:** lock down with an [Exchange Application Access Policy](https://learn.microsoft.com/graph/auth-limit-mailbox-access) targeting a mail-enabled security group that contains only the approved sender address. See the *Permissions* section below for the PowerShell snippet. |
-| **No automatic rollback if a deployment breaks a device** | Bad KB or installer requires help desk to manually clean up | **Use a pilot ring** in Intune (small canary group) before broad deployment. Let the Logic App expedite to the pilot ring first; broad ring follows on its normal cadence. If the pilot fires alerts, pause the analytics rule before the broad ring picks it up. For driver-related issues, use Intune's **Pause** action on the driver update policy ([docs](https://learn.microsoft.com/intune/device-updates/windows/configure-driver-update-policy)). |
-| **Office, Edge, drivers, and feature updates are not triggered by this framework** | Those CVEs stay open until their normal Intune policy runs | Configure the policies in the *Configuration required per update type* table above. Specifically: turn on `Allow Microsoft product updates` in update rings, configure M365 Apps update channel via ODT or Cloud Update, leave Edge auto-update on (or use Autopatch), and create a Windows driver update policy. |
+| **No automated remediation for non-Intune devices** | MECM-only and unmanaged devices fall back to email + Teams notification — humans take action | Co-management or Intune MDM enrollment. For pure MECM shops: build an Automatic Deployment Rule that subscribes to the email notifications and pushes the patch via standard ConfigMgr application deployment. |
+| **Lab-only third-party install path** | The current `Update-KEVRemediateThirdPartyPath.ps1` script makes each device pull installers from sites like `github.com` and `7-zip.org` at runtime — fine for a lab tenant, not appropriate for prod or gov (no internet egress, no version tracking, breaks when vendor URLs change) | **Intune-automated third-party patching is fully supported — just use the right Intune feature.** Replace the script with **Intune Win32 app assignments** ([docs](https://learn.microsoft.com/intune/app-management/deployment/add-win32)). The Intune admin packages each app once (`.intunewin`); the Logic App calls Graph `POST /deviceAppManagement/mobileApps/{id}/assign` to push the app to affected devices. Intune handles delivery from its own CDN, supersedence (auto-uninstall old version), retries, and install-state tracking — all gov-safe. |
+| **Tenant-wide impersonation risk on `Mail.Send`** | Without scoping, the Logic App's managed identity can send mail as **any user** in the tenant | **Required:** lock down with an [Exchange Application Access Policy](https://learn.microsoft.com/graph/auth-limit-mailbox-access) targeting a mail-enabled security group containing only the approved sender address. See the *Permissions* section for the PowerShell snippet. |
+| **No automated rollback for failed deployments** | A bad KB or installer requires the help desk to manually clean up | **Use a pilot ring** in Intune (small canary group) before broad deployment. Let the Logic App expedite to the pilot first; broad ring follows on its normal cadence. If the pilot fires alerts, pause the analytics rule before the broad ring picks it up. For driver issues, use Intune's **Pause** action on the driver update policy ([docs](https://learn.microsoft.com/intune/device-updates/windows/configure-driver-update-policy)). |
+| **Microsoft 365 Apps, Edge, drivers, and feature updates not auto-triggered** | Those CVEs stay open until their normal Intune policy runs | Configure the policies in the *Required Configuration per Update Type* table above. Specifically: turn on `Allow Microsoft product updates` in update rings, configure M365 Apps update channel via ODT or Cloud Update, leave Edge auto-update on (or use Autopatch), and create a Windows driver update policy. |
 
-### Microsoft Learn references
+### Microsoft Learn References
 
 - [Deploy expedited quality updates via Graph](https://learn.microsoft.com/graph/windowsupdates-deploy-expedited-update)
 - [Capabilities of Windows Autopatch (expedite supports quality only)](https://learn.microsoft.com/graph/windowsupdates-concept-overview#capabilities-of-windows-autopatch)
@@ -234,74 +233,75 @@ Before the framework can do its job, your tenant should already be set up for th
 
 ---
 
-## Prerequisites
+## ⚙️ Prerequisites
 
 | Requirement | Component |
 |---|---|
 | Azure subscription (Commercial, GCC, or GCC High) | All |
-| Sentinel workspace | tvm-data-ingest, sentinel-analytics, sentinel-workbooks, kev-remediation |
+| Sentinel workspace | TVM Data Ingest, Sentinel Analytics, Sentinel Workbooks, KEV Remediation |
 | Defender for Endpoint P2 with MDVM | All |
-| Windows E3/E5 | kev-remediation (WUfB path) |
-| Intune Plan 1 + Entra ID P1/P2 | kev-remediation (third-party path) |
+| Windows E3/E5 | KEV Remediation (WUfB path) |
+| Intune Plan 1 + Entra ID P1/P2 | KEV Remediation (third-party path) |
 | Az CLI | Deployment |
 
 ---
 
-## Permissions
+## 🔐 Permissions
 
 | Component | Identity | Permission | Scope |
 |---|---|---|---|
-| tvm-data-ingest | Logic App MI | `Vulnerability.Read.All` | WindowsDefenderATP |
-| tvm-data-ingest | Logic App MI | `Monitoring Metrics Publisher` | DCR resource |
-| sentinel-workbooks | User/group | `Microsoft Sentinel Reader` | Workspace RG |
-| kev-remediation | Logic App MI | `Microsoft Sentinel Responder` | Workspace |
-| kev-remediation | Logic App MI | `Log Analytics Reader` | Workspace |
-| kev-remediation | Logic App MI | `WindowsUpdates.ReadWrite.All` | Graph API |
-| kev-remediation | Logic App MI | `Device.Read.All` | Graph API |
-| kev-remediation | Logic App MI | `DeviceManagementManagedDevices.Read.All` | Graph API |
-| kev-remediation | Logic App MI | `DeviceManagementManagedDevices.PrivilegedOperations.All` | Graph API |
-| kev-remediation | Logic App MI | `DeviceManagementScripts.ReadWrite.All` | Graph API |
-| kev-remediation | Logic App MI | `Mail.Send` | Graph API ||
+| TVM Data Ingest | Logic App MI | `Vulnerability.Read.All` | WindowsDefenderATP |
+| TVM Data Ingest | Logic App MI | `Monitoring Metrics Publisher` | DCR resource |
+| Sentinel Workbooks | User/group | `Microsoft Sentinel Reader` | Workspace RG |
+| KEV Remediation | Logic App MI | `Microsoft Sentinel Responder` | Workspace |
+| KEV Remediation | Logic App MI | `Log Analytics Reader` | Workspace |
+| KEV Remediation | Logic App MI | `WindowsUpdates.ReadWrite.All` | Graph API |
+| KEV Remediation | Logic App MI | `Device.Read.All` | Graph API |
+| KEV Remediation | Logic App MI | `DeviceManagementManagedDevices.Read.All` | Graph API |
+| KEV Remediation | Logic App MI | `DeviceManagementManagedDevices.PrivilegedOperations.All` | Graph API |
+| KEV Remediation | Logic App MI | `DeviceManagementScripts.ReadWrite.All` | Graph API |
+| KEV Remediation | Logic App MI | `Mail.Send` | Graph API |
+| KEV Remediation | Logic App MI | `Windows Update Deployment Administrator` | Entra role |
 
-> **Security note on `Mail.Send`:** This application permission allows the managed identity to send email as **any user** in the tenant. Scope it down with an Exchange Application Access Policy:
+> ⚠️ **Security note on `Mail.Send`:** This application permission lets the managed identity send email as **any user** in the tenant. Scope it down with an Exchange Application Access Policy:
+>
 > ```powershell
-> New-ApplicationAccessPolicy -AppId <logic-app-mi-app-id> \
->   -PolicyScopeGroupId <mail-security-group> \
->   -AccessRight RestrictAccess \
+> New-ApplicationAccessPolicy -AppId <logic-app-mi-app-id> `
+>   -PolicyScopeGroupId <mail-security-group> `
+>   -AccessRight RestrictAccess `
 >   -Description "Restrict KEV-Remediate to send from approved address only"
 > ```
+>
 > Create a mail-enabled security group containing only the approved sender address.
-
-| kev-remediation | Logic App MI | `Windows Update Deployment Administrator` | Entra role |
 
 ---
 
-## Troubleshooting
+## 🩺 Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `RequestEntityTooLarge` in Logic App | Batch >1 MB | Lower `BatchSize` variable |
-| `MDETVM_CL` empty after 204 | Schema lag | Wait 15-30 min; check DCR diagnostics |
+| `RequestEntityTooLarge` in Logic App | Batch >1 MB | Lower the `BatchSize` variable |
+| `MDETVM_CL` empty after 204 | Schema lag | Wait 15–30 min; check DCR diagnostics |
 | `403 Missing application roles` | MI token cache | Recycle MI identity, re-grant roles |
 | Intune remediation stays `pending` | IME not installed | Assign IME bootstrap script to device group |
 | `initiateOnDemandProactiveRemediation` 404 | Device not MDM-managed | Enroll device into Intune MDM |
 | Detection finds no updates | Packages already current | Check registry versions on device |
 | No `MdmUrl` after enrollment | User not in MDM scope | Add user to auto-enrollment group |
-| WUfB expedited deployment no effect | Device not Entra joined | Device must be Entra joined or hybrid joined |
+| WUfB expedited deployment has no effect | Device not Entra joined | Device must be Entra joined or hybrid joined |
 
 ---
 
-## Cloud Support
+## ☁️ Cloud Support
 
-| Cloud | Graph API base | MDE API base | Notes |
+| Cloud | Graph API Base | MDE API Base | Notes |
 |---|---|---|---|
 | Commercial | `https://graph.microsoft.com` | `https://api.securitycenter.microsoft.com` | Default |
-| GCC | `https://graph.microsoft.com` | `https://api-gcc.securitycenter.microsoft.us` | Same Graph base |
+| GCC | `https://graph.microsoft.com` | `https://api-gcc.securitycenter.microsoft.us` | Same Graph base as Commercial |
 | GCC High | `https://graph.microsoft.us` | `https://api-gov.securitycenter.microsoft.us` | Different Graph base |
 
 ---
 
-## Credits
+## 🙏 Credits
 
 - **[Cyberlorians](https://github.com/Cyberlorians)** — Original MDETVM Logic App and TVM-to-Sentinel ingestion concept
 - **[Matt Zorich / kqlquery.com](https://kqlquery.com)** — CISA KEV correlation pattern using `externaldata()`
