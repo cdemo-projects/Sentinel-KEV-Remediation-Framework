@@ -21,7 +21,7 @@
         "itemsSearchKey": "ExceptionKey",
         "contentType": "text/csv",
         "numberOfLinesToSkip": 0,
-        "rawContent": "ExceptionKey,DeviceName,CveId,Justification,Reason,ApprovedBy,ApprovedDate,ExpirationDate,TicketReference\nEXAMPLE_cdemo_CVE-2025-0411,cdemo,CVE-2025-0411,Lab VM running intentionally outdated 7-Zip for demo,RiskAccepted,christian,2026-04-17,2027-04-17,LAB-001"
+        "rawContent": "ExceptionKey,DeviceName,CveId,Justification,Reason,ApprovedBy,ApprovedDate,ExpirationDate,TicketReference\nEXAMPLE_lab-vm-01_CVE-2025-0411,lab-vm-01,CVE-2025-0411,Lab VM running intentionally outdated 7-Zip for demo,RiskAccepted,<approver-upn>,2026-04-17,2027-04-17,LAB-001"
       }
     }
   ]

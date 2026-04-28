@@ -1435,15 +1435,15 @@
               "type": "String"
             },
             "NotificationEmail": {
-              "defaultValue": "admin@MngEnvMCAP017447.onmicrosoft.com",
+              "defaultValue": "admin@<tenant-domain>.onmicrosoft.com",
               "type": "String"
             },
             "ResourceGroupName": {
-              "defaultValue": "LearningFunTime_group",
+              "defaultValue": "<resource-group>",
               "type": "String"
             },
             "SubscriptionId": {
-              "defaultValue": "37541677-a116-4a0d-8118-a2c3e26ea8d1",
+              "defaultValue": "<subscription-id>",
               "type": "String"
             },
             "TeamsWebhookUrl": {
@@ -1459,11 +1459,11 @@
               "type": "Int"
             },
             "WorkspaceCustomerId": {
-              "defaultValue": "26f92647-2553-4c33-831c-11c27d576ba5",
+              "defaultValue": "<workspace-id>",
               "type": "String"
             },
             "WorkspaceName": {
-              "defaultValue": "Sentinel-Name-Only",
+              "defaultValue": "<workspace-name>",
               "type": "String"
             }
           },

@@ -137,13 +137,72 @@ The MDE REST API returns this data flattened — no joins needed in Sentinel KQL
 
 ---
 
-## Remediation Paths
+## How Patching Actually Works
 
-| Path | Trigger | Action | Automation Level |
-|---|---|---|---|
-| **Windows KB** | CVE has a `recommendedSecurityUpdateId` | WUfB expedited deployment via Graph API | Fully automated |
-| **Third-party (Intune)** | No KB, device is Intune MDM-managed | On-demand remediation: registry detection → download installer → silent install | Automated (device-gated) |
-| **Third-party (MECM)** | No KB, device is MECM-managed | Notification with CVE + device list + required version | Manual deployment |
+This framework only **automates a slice** of patching. Most updates are still delivered by Intune / Windows Update for Business (WUfB) on their normal cadence. This section spells out exactly what this project does, what it doesn't do, and what your tenant must already have configured for the rest.
+
+### What this framework does
+
+| Update type | What this framework does | Underlying mechanism |
+|---|---|---|
+| **Windows quality updates (KBs)** | Expedites the KB to affected devices when a KEV is detected | Graph `windowsUpdates/deploymentAudiences` → `expedite` ([docs](https://learn.microsoft.com/graph/windowsupdates-deploy-expedited-update)) |
+| **Third-party apps (Intune-managed)** ⚠️ *Lab/POC only* | Triggers an on-demand proactive remediation script that downloads the vendor installer and runs it silently | Graph `deviceManagement/managedDevices/{id}/initiateOnDemandProactiveRemediation` |
+| **Third-party apps (MECM-managed)** | Sends an email + Teams notification with the CVE, devices, and required version. No automated push | Manual hand-off |
+
+> ⚠️ **The third-party Intune path is a reference implementation for non-prod environments only.** It pulls vendor installers from the public internet, which is not appropriate for production or government tenants. For prod, pair this framework with **Intune Win32 apps + supersedence** or **MECM application deployment** for third-party patching. See the *Known gaps* table below for details.
+
+### What this framework does **not** do
+
+| Update type | Why not | Where it actually gets handled |
+|---|---|---|
+| **Windows feature updates** (e.g., 23H2 → 24H2) | No expedite API exists for feature updates ([Autopatch capabilities table](https://learn.microsoft.com/graph/windowsupdates-concept-overview#capabilities-of-windows-autopatch)) | Intune **Feature update policy** ([docs](https://learn.microsoft.com/intune/device-updates/windows/)) |
+| **Driver / firmware updates** | No expedite API exists for drivers (same capabilities table) | Intune **Windows driver update policy** ([docs](https://learn.microsoft.com/intune/device-updates/windows/manage-driver-updates)) |
+| **Microsoft 365 Apps (Office)** | Office uses Click-to-Run channels, not Windows Update | M365 Apps **update channels** + Office Deployment Tool / Cloud Update / Config Mgr ([docs](https://learn.microsoft.com/microsoft-365-apps/updates/overview-update-channels)) |
+| **Microsoft Edge** | Edge has its own updater (auto-updates by default) | Allow Edge to self-update **OR** manage via Autopatch / Edge Update policies ([docs](https://learn.microsoft.com/deployedge/microsoft-edge-update-policies)) |
+| **.NET Framework / Visual C++ runtimes** | These ride on Windows monthly cumulative updates | Already covered by your **Quality update ring** |
+| **Win32 LOB / non-Intune-managed apps** | No standard install method to call | Package as Win32 app with **supersedence** ([docs](https://learn.microsoft.com/intune/app-management/deployment/add-win32)) |
+
+### Why a KEV can still be detected after Intune rings have done their job
+
+- **Detection runs daily.** A device must check in, install the KB, and report back to MDE before MDVM stops flagging it. There's normally a 24–72 hour window where a KEV looks "open" even though the patch is already on the way.
+- **Patch may exist in the catalog before your ring deploys it.** Quality update rings ship in waves (pilot → broad). Devices in a later wave still show the CVE until their wave runs.
+- **Ring deferral may exceed CISA due date.** CISA gives ~21 days for KEVs. If your broad ring is deferred 14 days plus a 7-day deadline, you'll miss the window for some devices unless you expedite — which is exactly what this framework does.
+
+### Configuration required per update type
+
+Before the framework can do its job, your tenant should already be set up for the categories below. None of this is created by the framework.
+
+| Update type | Required config | Where it lives |
+|---|---|---|
+| **Windows quality updates** | Update ring with `Allow Microsoft product updates = Allow` so .NET / Defender platform updates flow with the OS | Intune → Devices → Windows → Update rings |
+| **Windows feature updates** | Feature update policy pinned to the target version | Intune → Devices → Windows → Feature updates |
+| **Drivers / firmware** | Driver update policy (auto-approve recommended drivers, deferral 0–30 days) ([docs](https://learn.microsoft.com/intune/device-updates/windows/configure-driver-update-policy)) | Intune → Devices → Windows → Driver updates |
+| **Microsoft 365 Apps** | Update channel (Current / Monthly Enterprise / Semi-Annual) configured via ODT, Cloud Update, or Config Mgr ([docs](https://learn.microsoft.com/microsoft-365-apps/updates/configure-update-settings-microsoft-365-apps)) | Office Deployment Tool / M365 admin center / ConfigMgr |
+| **Microsoft Edge** | Either leave Edge auto-update on (default) **or** turn on Autopatch Edge updates per Autopatch group ([docs](https://learn.microsoft.com/windows/deployment/windows-autopatch/manage/windows-autopatch-edge)) | Edge Update policies / Intune → Tenant Admin → Windows Autopatch |
+| **Third-party apps (Intune)** | Devices Intune-MDM-enrolled + Intune Management Extension installed; vendor installers reachable from device | Intune → Devices |
+| **Third-party apps (MECM)** | Standard ConfigMgr application + supersedence rules | Configuration Manager |
+
+### Known gaps in this framework
+
+| Gap | Impact | How to fix it |
+|---|---|---|
+| **Third-party path requires Intune MDM enrollment** | MECM-only or unmanaged devices fall back to email notification | Stand up co-management or move workloads to Intune. For pure MECM shops, build an Automatic Deployment Rule that subscribes to the email notifications and pushes the third-party patch via standard ConfigMgr application deployment. |
+| **Third-party installer path is lab/POC only** (`Update-KEVRemediateThirdPartyPath.ps1` has hard-coded vendor URLs) | Built to demo the SOAR pattern in a test tenant. Pulling installers from the public internet on every device is not appropriate for prod, especially gov | **Don't use this path in gov.** Have the Logic App **notify** the Intune / MECM team instead, then push third-party patches via **Intune Win32 apps with supersedence** ([docs](https://learn.microsoft.com/intune/app-management/deployment/add-win32)) or **MECM application deployment**. Both handle versioning, retries, and rollback natively. |
+| **Email sender uses `Mail.Send` application permission** | Tenant-wide impersonation if not scoped | **Required:** lock down with an [Exchange Application Access Policy](https://learn.microsoft.com/graph/auth-limit-mailbox-access) targeting a mail-enabled security group that contains only the approved sender address. See the *Permissions* section below for the PowerShell snippet. |
+| **No automatic rollback if a deployment breaks a device** | Bad KB or installer requires help desk to manually clean up | **Use a pilot ring** in Intune (small canary group) before broad deployment. Let the Logic App expedite to the pilot ring first; broad ring follows on its normal cadence. If the pilot fires alerts, pause the analytics rule before the broad ring picks it up. For driver-related issues, use Intune's **Pause** action on the driver update policy ([docs](https://learn.microsoft.com/intune/device-updates/windows/configure-driver-update-policy)). |
+| **Office, Edge, drivers, and feature updates are not triggered by this framework** | Those CVEs stay open until their normal Intune policy runs | Configure the policies in the *Configuration required per update type* table above. Specifically: turn on `Allow Microsoft product updates` in update rings, configure M365 Apps update channel via ODT or Cloud Update, leave Edge auto-update on (or use Autopatch), and create a Windows driver update policy. |
+
+### Microsoft Learn references
+
+- [Deploy expedited quality updates via Graph](https://learn.microsoft.com/graph/windowsupdates-deploy-expedited-update)
+- [Capabilities of Windows Autopatch (expedite supports quality only)](https://learn.microsoft.com/graph/windowsupdates-concept-overview#capabilities-of-windows-autopatch)
+- [Windows update management overview (Intune)](https://learn.microsoft.com/intune/device-updates/windows/)
+- [Manage Windows driver updates](https://learn.microsoft.com/intune/device-updates/windows/manage-driver-updates)
+- [Configure update settings for Microsoft 365 Apps](https://learn.microsoft.com/microsoft-365-apps/updates/configure-update-settings-microsoft-365-apps)
+- [Microsoft 365 Apps update channels](https://learn.microsoft.com/microsoft-365-apps/updates/overview-update-channels)
+- [Microsoft Edge update policies](https://learn.microsoft.com/deployedge/microsoft-edge-update-policies)
+- [Windows Autopatch — Microsoft Edge updates](https://learn.microsoft.com/windows/deployment/windows-autopatch/manage/windows-autopatch-edge)
+- [Add a Win32 app to Intune (with supersedence)](https://learn.microsoft.com/intune/app-management/deployment/add-win32)
 
 ---
 
