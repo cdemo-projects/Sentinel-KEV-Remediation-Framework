@@ -9,7 +9,6 @@ Modular solution for detecting and remediating [CISA Known Exploited Vulnerabili
 | **TVM Data Ingest** | Daily pipeline: MDE API → `MDETVM_CL` custom table in Sentinel | Sentinel, MDE P2 |
 | **Sentinel Analytics** | KQL rule correlates `MDETVM_CL` against CISA KEV catalog → incidents | TVM Data Ingest |
 | **Sentinel Workbooks** | Visual dashboards for KEV exposure and remediation tracking | TVM Data Ingest |
-| **Defender Hunting** | Standalone Advanced Hunting queries for the Defender XDR portal | MDE P2 (no Sentinel needed) |
 | **KEV Remediation** | SOAR playbook: auto-remediate via WUfB (Windows KBs) or Intune (third-party) | Sentinel Analytics + Intune |
 
 ---
