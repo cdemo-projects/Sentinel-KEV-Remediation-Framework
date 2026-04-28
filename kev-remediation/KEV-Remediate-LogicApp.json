@@ -84,6 +84,13 @@
     "VerificationMaxAttempts": {
       "type": "int",
       "defaultValue": 6
+    },
+    "ExpectedAnalyticRuleId": {
+      "type": "string",
+      "defaultValue": "c3f4a812-9e2b-4d71-b85a-6e7c1d3f20a9",
+      "metadata": {
+        "description": "GUID of the analytics rule allowed to trigger this playbook. Defaults to the CISA-KEV-MDVM rule shipped in this repo. Incidents from any other rule will be Cancelled."
+      }
     }
   },
   "variables": {
@@ -1329,8 +1336,36 @@
                   "type": "object"
                 }
               },
-              "runAfter": {},
+              "runAfter": {
+                "Validate_Incident_Source": [
+                  "Succeeded"
+                ]
+              },
               "type": "ParseJson"
+            },
+            "Validate_Incident_Source": {
+              "type": "If",
+              "expression": {
+                "not": {
+                  "contains": [
+                    "@toLower(string(coalesce(triggerBody()?['object']?['properties']?['relatedAnalyticRuleIds'], json('[]'))))",
+                    "@toLower(parameters('ExpectedAnalyticRuleId'))"
+                  ]
+                }
+              },
+              "actions": {
+                "Terminate_Unauthorized_Trigger": {
+                  "type": "Terminate",
+                  "inputs": {
+                    "runStatus": "Cancelled",
+                    "runError": {
+                      "code": "UnauthorizedTriggerSource",
+                      "message": "Incident did not originate from the approved CISA KEV analytics rule. Refusing to remediate. See ExpectedAnalyticRuleId parameter."
+                    }
+                  }
+                }
+              },
+              "runAfter": {}
             },
             "Parse_Query_Results": {
               "inputs": {
@@ -1501,6 +1536,41 @@
           }
         }
       }
+    },
+    {
+      "type": "Microsoft.Logic/workflows/providers/locks",
+      "apiVersion": "2016-09-01",
+      "name": "[concat(parameters('PlaybookName'), '/Microsoft.Authorization/lock-', parameters('PlaybookName'))]",
+      "properties": {
+        "level": "ReadOnly",
+        "notes": "Prevents tampering with KEV-Remediate Logic App definition. Remove only with change-control approval."
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Logic/workflows', parameters('PlaybookName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Logic/workflows/providers/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "name": "[concat(parameters('PlaybookName'), '/Microsoft.Insights/send-to-sentinel')]",
+      "properties": {
+        "workspaceId": "[resourceId(parameters('WorkspaceResourceGroup'), 'Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
+        "logs": [
+          {
+            "category": "WorkflowRuntime",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Logic/workflows', parameters('PlaybookName'))]"
+      ]
     }
   ],
   "outputs": {

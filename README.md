@@ -50,7 +50,11 @@ Sentinel-KEV-Remediation-Framework/
 ├── sentinel-analytics/              ← KEV detection rules (requires tvm-data-ingest)
 │   ├── CISA-KEV-MDVM-Correlation.kql
 │   ├── CISA-KEV-MDVM-AnalyticsRule.json
-│   └── KEV-Exceptions-Watchlist.json
+│   ├── KEV-Exceptions-Watchlist.json
+│   ├── Detect-LogicAppDefinitionChange.json     ← Hardening detection
+│   ├── Detect-MIClosedIncident.json             ← Hardening detection
+│   ├── Detect-WatchlistChange.json              ← Hardening detection
+│   └── Detect-KEVRemediateFailure.json          ← Hardening detection
 │
 ├── sentinel-workbooks/              ← Dashboards (requires tvm-data-ingest)
 │   ├── MDETVM-KEV-Workbook.json
@@ -68,17 +72,10 @@ Sentinel-KEV-Remediation-Framework/
     ├── AutoClose-KEVIncidents-LogicApp.json
     └── AutoClose-KEVIncidents-LogicApp.gov.json
 
-└── security/                        ← Hardening pack (apply after deployment)
-    ├── README.md                     ← Risk → fix mapping + apply order
-    ├── Lock-MailSendScope.ps1        ← Exchange app access policy for Mail.Send
-    ├── Lock-KEVRemediateResources.ps1← Resource locks + diagnostic settings
-    ├── Move-TeamsWebhookToKeyVault.ps1
-    ├── Patch-IncidentSourceValidation.ps1
-    ├── Patch-AutoCloseTwoSnapshots.ps1
-    ├── Detect-LogicAppDefinitionChange.json
-    ├── Detect-MIClosedIncident.json
-    ├── Detect-WatchlistChange.json
-    └── Detect-KEVRemediateFailure.json
+└── security/                        ← Tenant-level hardening (run once per tenant)
+    ├── README.md
+    ├── Lock-MailSendScope.ps1        ← Required (Exchange Admin)
+    └── Move-TeamsWebhookToKeyVault.ps1 ← Optional (RG Owner; only if using Teams)
 ```
 
 ---
@@ -106,10 +103,17 @@ az deployment group create -g <rg> `
 ### Option 2 — Detection + Incidents (Alerting)
 
 ```powershell
-# After Option 1, add the analytics rule
+# After Option 1, add the analytics rules
 az deployment group create -g <rg> `
   --template-file sentinel-analytics/CISA-KEV-MDVM-AnalyticsRule.json `
   --parameters workspace=<ws>
+
+# Optional: deploy the four hardening detection rules (ship disabled; review then enable)
+foreach ($rule in 'Detect-LogicAppDefinitionChange','Detect-MIClosedIncident','Detect-WatchlistChange','Detect-KEVRemediateFailure') {
+  az deployment group create -g <rg> `
+    --template-file "sentinel-analytics/$rule.json" `
+    --parameters workspace=<ws>
+}
 ```
 
 ### Option 3 — Full Automation (Remediation)

@@ -81,7 +81,7 @@
                 "uri": "[concat('https://api.loganalytics.io/v1/workspaces/', reference(variables('workspaceResourceId'), '2022-10-01').customerId, '/query')]",
                 "headers": { "Content-Type": "application/json" },
                 "body": {
-                  "query": "MDETVM_CL\n| where TimeGenerated > ago(2d)\n| summarize arg_max(TimeGenerated, *) by cveId, deviceName\n| extend Key = strcat(cveId, '|', deviceName)\n| distinct Key"
+                  "query": "// HARDENED: requires two consecutive clean snapshots AND device must still be reporting\nlet RecentSnapshot = MDETVM_CL\n  | where TimeGenerated > ago(24h)\n  | summarize arg_max(TimeGenerated, *) by cveId, deviceName\n  | extend Key = strcat(cveId, '|', deviceName)\n  | distinct Key;\nlet PriorSnapshot = MDETVM_CL\n  | where TimeGenerated between (ago(48h) .. ago(24h))\n  | summarize arg_max(TimeGenerated, *) by cveId, deviceName\n  | extend Key = strcat(cveId, '|', deviceName)\n  | distinct Key;\nlet DevicesReporting = MDETVM_CL\n  | where TimeGenerated > ago(30h)\n  | distinct deviceName;\nlet UnreportingDeviceKeys = SecurityIncident\n  | where TimeGenerated > ago(30d)\n  | summarize arg_max(TimeGenerated, *) by IncidentNumber\n  | where Status != 'Closed'\n  | where Title has 'CISA KEV Detected on'\n  | extend parts = split(Title, ' ')\n  | extend CveId = tostring(parts[0])\n  | extend DeviceName = tostring(parts[-1])\n  | where DeviceName !in (DevicesReporting)\n  | extend Key = strcat(CveId, '|', DeviceName)\n  | distinct Key;\nunion RecentSnapshot, PriorSnapshot, UnreportingDeviceKeys\n| distinct Key"
                 },
                 "authentication": { "type": "ManagedServiceIdentity", "audience": "https://api.loganalytics.io" }
               },
@@ -143,6 +143,41 @@
           "outputs": {}
         }
       }
+    },
+    {
+      "type": "Microsoft.Logic/workflows/providers/locks",
+      "apiVersion": "2016-09-01",
+      "name": "[concat(parameters('PlaybookName'), '/Microsoft.Authorization/lock-', parameters('PlaybookName'))]",
+      "properties": {
+        "level": "ReadOnly",
+        "notes": "Prevents tampering with AutoClose-KEVIncidents Logic App definition. Remove only with change-control approval."
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Logic/workflows', parameters('PlaybookName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Logic/workflows/providers/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "name": "[concat(parameters('PlaybookName'), '/Microsoft.Insights/send-to-sentinel')]",
+      "properties": {
+        "workspaceId": "[resourceId(parameters('WorkspaceResourceGroup'), 'Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
+        "logs": [
+          {
+            "category": "WorkflowRuntime",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Logic/workflows', parameters('PlaybookName'))]"
+      ]
     }
   ]
 }
