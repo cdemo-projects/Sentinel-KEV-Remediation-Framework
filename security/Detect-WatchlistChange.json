@@ -1,0 +1,54 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workspace": { "type": "String" }
+    },
+    "resources": [
+        {
+            "id": "[concat(resourceId('Microsoft.OperationalInsights/workspaces/providers', parameters('workspace'), 'Microsoft.SecurityInsights'),'/alertRules/f6a7b8c9-3d4e-4f7a-b1ac-2d3e4f5a6b7c')]",
+            "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/f6a7b8c9-3d4e-4f7a-b1ac-2d3e4f5a6b7c')]",
+            "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+            "kind": "Scheduled",
+            "apiVersion": "2023-12-01-preview",
+            "properties": {
+                "displayName": "KEV Framework - KEV-Exceptions Watchlist Modified",
+                "description": "Alerts when the KEV-Exceptions watchlist is created, updated, or has items modified. The watchlist suppresses CVE+device pairs from generating incidents - an attacker who can write to it can hide a backdoor permanently. All changes should match a documented change-control ticket.",
+                "severity": "Medium",
+                "enabled": false,
+                "query": "AzureActivity\n| where TimeGenerated > ago(1h)\n| where OperationNameValue has_any (\n    'MICROSOFT.OPERATIONALINSIGHTS/WORKSPACES/PROVIDERS/WATCHLISTS/WRITE',\n    'MICROSOFT.OPERATIONALINSIGHTS/WORKSPACES/PROVIDERS/WATCHLISTS/WATCHLISTITEMS/WRITE',\n    'MICROSOFT.OPERATIONALINSIGHTS/WORKSPACES/PROVIDERS/WATCHLISTS/WATCHLISTITEMS/DELETE',\n    'MICROSOFT.OPERATIONALINSIGHTS/WORKSPACES/PROVIDERS/WATCHLISTS/DELETE'\n)\n| where ActivityStatusValue == 'Success'\n| where _ResourceId has 'KEV-Exceptions' or tostring(parse_json(tostring(Properties)).resource) has 'KEV-Exceptions'\n| project TimeGenerated, OperationNameValue, Caller, CallerIpAddress, ResourceGroup, _ResourceId, CorrelationId\n| extend AccountName = tostring(split(Caller, '@')[0])\n| extend AccountUPNSuffix = tostring(split(Caller, '@')[1])",
+                "queryFrequency": "PT15M",
+                "queryPeriod": "PT1H",
+                "triggerOperator": "GreaterThan",
+                "triggerThreshold": 0,
+                "suppressionDuration": "PT1H",
+                "suppressionEnabled": false,
+                "tactics": [ "DefenseEvasion" ],
+                "techniques": [ "T1562" ],
+                "incidentConfiguration": {
+                    "createIncident": true,
+                    "groupingConfiguration": {
+                        "enabled": true,
+                        "reopenClosedIncident": false,
+                        "lookbackDuration": "PT24H",
+                        "matchingMethod": "AllEntities"
+                    }
+                },
+                "eventGroupingSettings": { "aggregationKind": "SingleAlert" },
+                "entityMappings": [
+                    {
+                        "entityType": "Account",
+                        "fieldMappings": [
+                            { "identifier": "Name", "columnName": "AccountName" },
+                            { "identifier": "UPNSuffix", "columnName": "AccountUPNSuffix" }
+                        ]
+                    },
+                    {
+                        "entityType": "IP",
+                        "fieldMappings": [ { "identifier": "Address", "columnName": "CallerIpAddress" } ]
+                    }
+                ]
+            }
+        }
+    ]
+}
