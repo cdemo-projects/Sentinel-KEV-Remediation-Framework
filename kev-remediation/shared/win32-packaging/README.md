@@ -6,6 +6,8 @@ Two-step workflow to package a third-party app and ship it to Intune (commercial
 examples\<app>.json   <-- one config per app, both scripts read it
 Build-Win32Package.ps1  -- run on a VM with internet, produces .intunewin
 Upload-Win32App.ps1     -- run with Graph access, ships to Intune
+Test-Win32Upload.ps1    -- optional: validates auth + scopes against a tenant
+                           (creates and deletes a placeholder app, no payload)
 ```
 
 After upload, paste the printed app GUID into [`../Win32-App-Mapping.json`](../Win32-App-Mapping.json) so the Logic App can find it.
@@ -69,6 +71,16 @@ Re-run with `-Force` to redownload the installer and rebuild.
 ---
 
 ## 4. Upload to Intune
+
+**(Optional but recommended on first run against a new tenant)** validate auth + scopes first:
+
+```powershell
+.\Test-Win32Upload.ps1 -Cloud Gov
+```
+
+This creates and deletes a placeholder mobileApp (no payload). Confirms `Connect-MgGraph` works for the right cloud, the account holds `DeviceManagementApps.ReadWrite.All`, and the Graph endpoint is reachable. ~10 seconds.
+
+Then the real upload:
 
 ```powershell
 .\Upload-Win32App.ps1 -Config .\examples\7zip-2409.json -Cloud Gov
