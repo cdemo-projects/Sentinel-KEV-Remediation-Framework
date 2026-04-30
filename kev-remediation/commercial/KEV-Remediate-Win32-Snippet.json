@@ -1,0 +1,130 @@
+{
+  "$comment": "Drop-in Logic App Scope that replaces the lab-only Proactive Remediation execution inside Path_B_Third_Party_Approval. Paste this as a sibling to (or replacement of) the existing Intune execution scope. Assumes upstream actions have already produced PilotDevices (array of objects with deviceName + azureADDeviceId) and Parse_Query_Results (with cveId, softwareVendor, softwareName).",
+  "$contract": {
+    "requires": {
+      "actions": [
+        "Parse_Query_Results"
+      ],
+      "variables": [
+        "PilotDevices"
+      ],
+      "parameters": [
+        "GraphApiBase",
+        "Win32MappingUrl"
+      ],
+      "permissions": [
+        "DeviceManagementApps.ReadWrite.All"
+      ]
+    },
+    "produces": {
+      "variables": [
+        "Win32AssignmentResults"
+      ]
+    }
+  },
+  "Path_B_Win32_App_Assignment": {
+    "type": "Scope",
+    "actions": {
+      "Init_Win32AssignmentResults": {
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            { "name": "Win32AssignmentResults", "type": "array", "value": [] }
+          ]
+        }
+      },
+      "Get_Win32_App_Mapping": {
+        "type": "Http",
+        "runAfter": { "Init_Win32AssignmentResults": [ "Succeeded" ] },
+        "inputs": {
+          "method": "GET",
+          "uri": "@parameters('Win32MappingUrl')"
+        },
+        "$comment": "Win32MappingUrl points at the JSON file (gov-hosted: blob with read SAS, or App Config). Returns Win32-App-Mapping.json content."
+      },
+      "Find_Mapping_For_CVE": {
+        "type": "Compose",
+        "runAfter": { "Get_Win32_App_Mapping": [ "Succeeded" ] },
+        "inputs": "@first(filter(body('Get_Win32_App_Mapping')?['mappings'], equals(item()?['cveId'], outputs('Parse_Query_Results')?['cveId'])))"
+      },
+      "If_Mapping_Found": {
+        "type": "If",
+        "runAfter": { "Find_Mapping_For_CVE": [ "Succeeded" ] },
+        "expression": {
+          "and": [
+            { "not": { "equals": [ "@outputs('Find_Mapping_For_CVE')", null ] } },
+            { "greater": [ "@length(coalesce(outputs('Find_Mapping_For_CVE')?['intuneAppId'], ''))", 0 ] }
+          ]
+        },
+        "actions": {
+          "For_Each_Pilot_Device": {
+            "type": "Foreach",
+            "foreach": "@variables('PilotDevices')",
+            "actions": {
+              "Assign_Win32_App_To_Device": {
+                "type": "Http",
+                "inputs": {
+                  "method": "POST",
+                  "uri": "@{concat(parameters('GraphApiBase'), '/v1.0/deviceAppManagement/mobileApps/', outputs('Find_Mapping_For_CVE')?['intuneAppId'], '/assignments')}",
+                  "headers": { "Content-Type": "application/json" },
+                  "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('GraphApiBase')" },
+                  "body": {
+                    "@@odata.type": "#microsoft.graph.mobileAppAssignment",
+                    "intent": "required",
+                    "target": {
+                      "@@odata.type": "#microsoft.graph.deviceAndAppManagementAssignmentTarget",
+                      "deviceAndAppManagementAssignmentFilterId": null,
+                      "deviceAndAppManagementAssignmentFilterType": "none"
+                    },
+                    "settings": {
+                      "@@odata.type": "#microsoft.graph.win32LobAppAssignmentSettings",
+                      "notifications": "showAll",
+                      "deliveryOptimizationPriority": "foreground",
+                      "installTimeSettings": null,
+                      "restartSettings": null
+                    }
+                  }
+                },
+                "$comment": "Per-device targeting requires either (a) a static AAD device-scoped group already created with this single device, or (b) Filter assignment on a tenant-wide group. Many gov customers prefer (a) for explicit auditability. The body above creates a fresh assignment object; for production, use a pre-created device group ID in the target instead of allDevicesAssignmentTarget."
+              },
+              "Record_Assignment_Result": {
+                "type": "AppendToArrayVariable",
+                "runAfter": { "Assign_Win32_App_To_Device": [ "Succeeded", "Failed" ] },
+                "inputs": {
+                  "name": "Win32AssignmentResults",
+                  "value": {
+                    "deviceName": "@{items('For_Each_Pilot_Device')?['deviceName']}",
+                    "azureADDeviceId": "@{items('For_Each_Pilot_Device')?['azureADDeviceId']}",
+                    "intuneAppId": "@{outputs('Find_Mapping_For_CVE')?['intuneAppId']}",
+                    "intuneAppDisplayName": "@{outputs('Find_Mapping_For_CVE')?['intuneAppDisplayName']}",
+                    "cveId": "@{outputs('Parse_Query_Results')?['cveId']}",
+                    "status": "@{outputs('Assign_Win32_App_To_Device')?['statusCode']}",
+                    "timestamp": "@{utcNow()}"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "else": {
+          "actions": {
+            "Log_No_Mapping": {
+              "type": "AppendToArrayVariable",
+              "inputs": {
+                "name": "Win32AssignmentResults",
+                "value": {
+                  "cveId": "@{outputs('Parse_Query_Results')?['cveId']}",
+                  "softwareVendor": "@{outputs('Parse_Query_Results')?['softwareVendor']}",
+                  "softwareName": "@{outputs('Parse_Query_Results')?['softwareName']}",
+                  "status": "no-mapping",
+                  "action": "Falling back to notification-only path. Add a mapping entry in Win32-App-Mapping.json and re-run.",
+                  "timestamp": "@{utcNow()}"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
