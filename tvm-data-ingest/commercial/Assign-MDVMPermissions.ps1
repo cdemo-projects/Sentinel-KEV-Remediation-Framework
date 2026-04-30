@@ -2,10 +2,9 @@
 # Assign-MDVMPermissions.ps1
 # =============================================================================
 # PURPOSE:
-#   Assigns three permissions to the MDETVM Logic App's System Assigned MI:
+#   Assigns two permissions to the MDETVM Logic App's System Assigned MI:
 #   1. Vulnerability.Read.All on WindowsDefenderATP (TVM REST API access)
-#   2. AdvancedQuery.Read.All on WindowsDefenderATP (Advanced Hunting API access)
-#   3. Monitoring Metrics Publisher on the DCR (Logs Ingestion API access)
+#   2. Monitoring Metrics Publisher on the DCR (Logs Ingestion API access)
 #
 # WHEN TO RUN:
 #   After Step 1 (Deploy MDETVM-LogicApp.json). The Logic App, DCE, DCR, and
@@ -74,7 +73,7 @@ Write-Host "Found managed identity principal ID: $miPrincipalId" -ForegroundColo
 # -------------------------------------------------------------------
 
 Write-Host ""
-Write-Host "=== Permissions 1 & 2: Defender API app roles ===" -ForegroundColor Magenta
+Write-Host "=== Permission 1: Defender API app role ===" -ForegroundColor Magenta
 
 # AppId for WindowsDefenderATP (same across commercial and GCC tenants)
 $wdatpAppId = "fc780465-2017-40d4-a0c5-307022471b92"
@@ -89,7 +88,7 @@ if ($null -eq $resource) {
 
 Write-Host "Found: $($resource.DisplayName) (Id: $($resource.Id))" -ForegroundColor Green
 
-foreach ($permission in @("Vulnerability.Read.All", "AdvancedQuery.Read.All")) {
+foreach ($permission in @("Vulnerability.Read.All")) {
     $appRole = $resource.AppRole | Where-Object { $_.Value -eq $permission }
 
     if ($null -eq $appRole) {
@@ -122,7 +121,7 @@ foreach ($permission in @("Vulnerability.Read.All", "AdvancedQuery.Read.All")) {
 # -------------------------------------------------------------------
 
 Write-Host ""
-Write-Host "=== Permission 3: Monitoring Metrics Publisher on DCR ===" -ForegroundColor Magenta
+Write-Host "=== Permission 2: Monitoring Metrics Publisher on DCR ===" -ForegroundColor Magenta
 
 Write-Host "Looking up DCR '$DcrName' in resource group '$ResourceGroupName'..." -ForegroundColor Cyan
 
