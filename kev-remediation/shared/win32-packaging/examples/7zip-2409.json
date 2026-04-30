@@ -1,0 +1,65 @@
+{
+  "$comment": "Worked example: 7-Zip 24.09 (x64) MSI for Intune Win32 deployment. Both Build-Win32Package.ps1 and Upload-Win32App.ps1 read this file. Update vendorUrl + sha256 + version when a new release ships, then re-run both scripts.",
+
+  "appKey": "7zip-2409",
+
+  "source": {
+    "vendorUrl": "https://www.7-zip.org/a/7z2409-x64.msi",
+    "sha256": "REPLACE_ME_WITH_VENDOR_PUBLISHED_HASH",
+    "fileName": "7z2409-x64.msi"
+  },
+
+  "package": {
+    "stagingFolder": "C:\\Win32Source\\7zip",
+    "outputFolder": "C:\\Win32Output"
+  },
+
+  "intuneApp": {
+    "displayName": "7-Zip 24.09 (x64)",
+    "description": "7-Zip file archiver. Deployed for KEV remediation via Sentinel automation.",
+    "publisher": "Igor Pavlov",
+    "notes": "KEV-mapping: igor_pavlov/7-zip; supersedes prior 7-Zip versions.",
+    "owner": "SecurityOps",
+    "developer": "Igor Pavlov",
+    "informationUrl": "https://www.7-zip.org/",
+    "privacyInformationUrl": "https://www.7-zip.org/license.txt",
+    "isFeatured": false,
+    "installCommandLine": "msiexec /i \"7z2409-x64.msi\" /qn",
+    "uninstallCommandLine": "msiexec /x \"{23170F69-40C1-2702-2409-000001000000}\" /qn",
+    "installExperience": {
+      "runAsAccount": "system",
+      "deviceRestartBehavior": "suppress"
+    },
+    "applicableArchitectures": "x64",
+    "minimumSupportedWindowsRelease": "1809",
+    "msiInformation": {
+      "productCode": "{23170F69-40C1-2702-2409-000001000000}",
+      "productVersion": "24.09.00.0",
+      "upgradeCode": "{23170F69-40C1-2702-0000-000004000000}",
+      "requiresReboot": false,
+      "packageType": "perMachine"
+    },
+    "detectionRules": [
+      {
+        "type": "msi",
+        "productCode": "{23170F69-40C1-2702-2409-000001000000}",
+        "productVersionOperator": "greaterThanOrEqual",
+        "productVersion": "24.09.00.0"
+      }
+    ],
+    "requirementRules": []
+  },
+
+  "supersedence": {
+    "comment": "Optional: list previous app GUIDs in Intune that this version supersedes. Configured via separate Graph PATCH after upload because Win32 LOB supersedence is its own subresource.",
+    "supersedesAppIds": []
+  },
+
+  "schemaNotes": {
+    "vendorUrl": "Direct download URL for the canonical vendor installer. HTTPS required.",
+    "sha256": "SHA256 hash from the vendor's published checksum. Build script aborts if mismatch.",
+    "intuneApp.notes": "Free-text Intune Notes field. Convention: 'KEV-mapping: <vendor>/<software>' so a human can audit which Intune app maps to which MDETVM_CL row.",
+    "msiInformation.productCode": "MUST match the MSI's actual ProductCode. msiexec /x will silently no-op if wrong. Check with: msiexec /a <msi> TARGETDIR=C:\\extracted then look at Product.wxs.",
+    "detectionRules": "Use 'msi' type for any MSI; Intune compares ProductCode + ProductVersion against installed software. For non-MSI EXE installers use 'registry' or 'file' type."
+  }
+}
