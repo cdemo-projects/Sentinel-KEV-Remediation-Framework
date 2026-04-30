@@ -30,10 +30,10 @@
 
 .EXAMPLE
     .\Assign-KEVRemediatePermissions.gov.ps1 `
-        -ResourceGroupName "cdemopoulos-dev" `
-        -WorkspaceName "sentinel-law-sleepingdragons" `
-        -WorkspaceResourceGroup "eli-test-va-Tier3-rg-network" `
-        -TenantId "4c3f2ea6-7b4e-4ffb-8c09-135157585a8d"
+        -ResourceGroupName "<your-rg>" `
+        -WorkspaceName "<your-sentinel-workspace>" `
+        -WorkspaceResourceGroup "<workspace-rg-if-different>" `
+        -TenantId "<your-gcc-tenant-guid>"
 #>
 
 [CmdletBinding()]
