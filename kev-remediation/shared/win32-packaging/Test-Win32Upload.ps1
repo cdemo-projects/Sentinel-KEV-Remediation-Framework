@@ -94,7 +94,6 @@ $body = @{
         }
     )
     requirementRules = @()
-    rules            = @()
     returnCodes      = @(@{ returnCode = 0; type = 'success' })
 }
 
