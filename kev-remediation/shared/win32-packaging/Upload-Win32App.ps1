@@ -258,7 +258,8 @@ try {
 # Renew SAS if upload took close to its expiry (rare for small apps; skipped here)
 
 # Commit block list
-$blockListXml = '<?xml version="1.0" encoding="utf-8"?><BlockList>' + ($blockIds | ForEach-Object { "<Latest>$_</Latest>" }) -join '' + '</BlockList>'
+$blocksXml = ($blockIds | ForEach-Object { "<Latest>$_</Latest>" }) -join ''
+$blockListXml = '<?xml version="1.0" encoding="utf-8"?><BlockList>' + $blocksXml + '</BlockList>'
 Invoke-WebRequest -Method PUT -Uri "$sas&comp=blocklist" -Body $blockListXml -ContentType 'application/xml' -UseBasicParsing | Out-Null
 Write-Host "      block list committed ($($blockIds.Count) blocks)." -ForegroundColor Green
 
