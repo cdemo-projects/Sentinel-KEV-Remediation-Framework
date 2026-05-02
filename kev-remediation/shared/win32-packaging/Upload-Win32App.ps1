@@ -179,7 +179,6 @@ $mobileAppBody = @{
     }
     detectionRules                   = $detectionRules
     requirementRules                 = @()
-    rules                            = @()
     returnCodes                      = @(
         @{ returnCode = 0;    type = 'success' },
         @{ returnCode = 1707; type = 'success' },
