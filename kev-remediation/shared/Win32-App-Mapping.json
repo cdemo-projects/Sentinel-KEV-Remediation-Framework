@@ -1,18 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$comment": "CVE -> Intune Win32 app mapping for KEV third-party remediation. The Logic App reads this to look up which packaged Intune app fixes a given CVE.",
-  "version": 1,
-  "lastUpdated": "2026-04-30",
+  "version": 2,
+  "lastUpdated": "2026-05-01",
   "mappings": [
     {
-      "cveId": "CVE-2024-XXXXX",
+      "cveId": "CVE-PLACEHOLDER-7ZIP",
       "softwareVendor": "igor_pavlov",
       "softwareName": "7-zip",
-      "intuneAppId": "00000000-0000-0000-0000-000000000000",
-      "intuneAppDisplayName": "7-Zip 24.09 (x64)",
-      "minRemediatedVersion": "24.09",
+      "intuneAppId": "<your-7zip-mobileapps-guid>",
+      "intuneAppDisplayName": "7-Zip 24.09 (x64 edition)",
+      "minRemediatedVersion": "24.09.00.0",
       "supersedesAppIds": [],
-      "notes": "Microsoft Enterprise App Management catalog handles supersedence automatically when assigned via Graph."
+      "notes": "Replace intuneAppId with the GUID from your Intune tenant after uploading the .intunewin (Apps -> Windows -> Add -> Windows app (Win32)). cveId is a placeholder until a Windows endpoint with 7-Zip is onboarded to MDE - replace with the actual KEV-listed 7-Zip CVE when MDETVM_CL surfaces a real row."
     },
     {
       "cveId": "CVE-2024-YYYYY",
@@ -22,7 +22,7 @@
       "intuneAppDisplayName": "Notepad++ 8.6.9 (x64)",
       "minRemediatedVersion": "8.6.9",
       "supersedesAppIds": [],
-      "notes": "Vendor MSI packaged via IntuneWinAppUtil.exe."
+      "notes": "Sample - replace with real GUID after packaging."
     },
     {
       "cveId": "CVE-2024-ZZZZZ",
@@ -32,7 +32,7 @@
       "intuneAppDisplayName": "Google Chrome (Enterprise) 124.0.6367.119",
       "minRemediatedVersion": "124.0.6367.119",
       "supersedesAppIds": [],
-      "notes": "Use Google Chrome Enterprise MSI, not the consumer installer."
+      "notes": "Sample - use Google Chrome Enterprise MSI, not the consumer installer."
     }
   ],
   "schema": {

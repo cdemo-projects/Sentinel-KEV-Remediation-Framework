@@ -38,9 +38,11 @@
         "runAfter": { "Init_Win32AssignmentResults": [ "Succeeded" ] },
         "inputs": {
           "method": "GET",
-          "uri": "@parameters('Win32MappingUrl')"
+          "uri": "@parameters('Win32MappingUrl')",
+          "headers": { "x-ms-version": "2021-08-06" },
+          "authentication": { "type": "ManagedServiceIdentity", "audience": "https://storage.azure.com" }
         },
-        "$comment": "Win32MappingUrl points at the JSON file (gov-hosted: blob with read SAS, or App Config). Returns Win32-App-Mapping.json content."
+        "$comment": "Win32MappingUrl is the blob URL produced by Deploy-MappingHost.ps1. The Logic App MI must hold Storage Blob Data Reader on the container. Same audience in commercial and gov - storage uses storage.azure.com for OAuth in both clouds."
       },
       "Find_Mapping_For_CVE": {
         "type": "Compose",

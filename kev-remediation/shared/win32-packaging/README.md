@@ -3,14 +3,18 @@
 Two-step workflow to package a third-party app and ship it to Intune (commercial or gov) for use by the KEV-Remediate Logic App.
 
 ```
-examples\<app>.json   <-- one config per app, both scripts read it
+examples\<app>.json     <-- one config per app, both scripts read it
 Build-Win32Package.ps1  -- run on a VM with internet, produces .intunewin
-Upload-Win32App.ps1     -- run with Graph access, ships to Intune
-Test-Win32Upload.ps1    -- optional: validates auth + scopes against a tenant
-                           (creates and deletes a placeholder app, no payload)
+                           (PROVEN WORKING in GCC, May 2026)
+Upload-Win32App.ps1     -- BETA: implements the full Win32 LOB upload protocol via Graph
+                           Steps 1-7 verified working; step 8 (commit file with encryption info)
+                           returns commitFileFailed in current testing. Use the Intune portal
+                           upload flow for now and revisit this script in a future hardening pass.
+Test-Win32Upload.ps1    -- validates auth + scopes against a tenant
+                           (creates and deletes a placeholder app, no payload) - WORKING
 ```
 
-After upload, paste the printed app GUID into [`../Win32-App-Mapping.json`](../Win32-App-Mapping.json) so the Logic App can find it.
+**Recommended path today:** run `Build-Win32Package.ps1` on the VM, then upload the resulting `.intunewin` via the Intune portal (Apps -> Windows -> + Create -> Windows app (Win32)). Paste the resulting Intune app GUID into [`../Win32-App-Mapping.json`](../Win32-App-Mapping.json).
 
 ---
 
