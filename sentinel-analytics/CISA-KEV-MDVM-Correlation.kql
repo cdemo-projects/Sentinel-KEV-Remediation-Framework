@@ -1,0 +1,134 @@
+// =============================================================================
+// CISA-KEV-MDVM-Correlation.kql
+// =============================================================================
+// PURPOSE:
+//   Correlates devices in the MDETVM_CL table (populated by the MDETVM Logic App)
+//   against the live CISA Known Exploited Vulnerabilities (KEV) catalog.
+//   Returns devices where an active CVE matches a CISA KEV entry.
+//
+// TABLE: MDETVM_CL (populated by MDETVM-LogicApp.json)
+//   Created by the legacy HTTP Data Collector API — fields use type suffixes:
+//   _s (string), _d (double/number), _b (boolean)
+//
+// USAGE:
+//   Run in Sentinel Log Analytics (Logs) to test before enabling the analytics rule.
+//   The analytics rule (CISA-KEV-MDVM-AnalyticsRule.json) uses OPTION A with
+//   an added SecurityIncident dedup check.
+//
+// SOURCES:
+//   - Cyberlorians Logic App: https://github.com/Cyberlorians/Articles/blob/main/TVMIngestion.md
+//   - CISA KEV: https://www.cisa.gov/known-exploited-vulnerabilities
+//   - Pattern: https://kqlquery.com/posts/automatic-cisa-vulnerability-notifications/
+// =============================================================================
+
+// =============================================================================
+// --- OPTION A: Alert on NEW CISA KEV entries (added in last 1 day) ----------
+// Use this as the Scheduled Analytics Rule (hourly, 1-day lookback).
+// Best for: real-time incident creation when a new KEV affects your devices.
+// =============================================================================
+
+let NewKEVThreshold = 1d;
+let CISA_KEV = externaldata(
+    cveID: string,
+    vendorProject: string,
+    product: string,
+    vulnerabilityName: string,
+    dateAdded: datetime,
+    shortDescription: string,
+    requiredAction: string,
+    dueDate: datetime,
+    knownRansomwareCampaignUse: string,
+    notes: string)
+    [@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
+    with (format="csv", ignoreFirstRecord=True);
+let NewKEVs = CISA_KEV
+    | where dateAdded > startofday(now() - NewKEVThreshold);
+MDETVM_CL
+| where TimeGenerated > ago(1d)
+| project
+    TimeGenerated,
+    DeviceName = deviceName_s,
+    CVEId = cveId_s,
+    OsPlatform = osPlatform_s,
+    OsVersion = osVersion_s,
+    SoftwareName = softwareName_s,
+    SoftwareVendor = softwareVendor_s,
+    SoftwareVersion = softwareVersion_s,
+    Severity = vulnerabilitySeverityLevel_s,
+    CvssScore = cvssScore_d,
+    ExploitabilityLevel = exploitabilityLevel_s,
+    SecurityUpdateAvailable = securityUpdateAvailable_b,
+    RecommendedUpdate = recommendedSecurityUpdate_s
+| join kind=inner (NewKEVs) on $left.CVEId == $right.cveID
+| extend DueDateInDays = datetime_diff('day', dueDate, now())
+| extend IsRansomware = knownRansomwareCampaignUse != "Unknown"
+| project
+    TimeGenerated,
+    ['Device Name'] = DeviceName,
+    ['CVE ID'] = CVEId,
+    OsPlatform,
+    OsVersion,
+    Software = SoftwareName,
+    SoftwareVendor,
+    Version = SoftwareVersion,
+    Severity,
+    ['CVSS Score'] = CvssScore,
+    ExploitabilityLevel,
+    ['Update Available'] = SecurityUpdateAvailable,
+    ['Recommended Update'] = RecommendedUpdate,
+    Vendor = vendorProject,
+    Product = product,
+    Vulnerability = vulnerabilityName,
+    dateAdded,
+    requiredAction,
+    ['Due Date'] = dueDate,
+    DueDateInDays,
+    IsRansomware,
+    ['Ransomware Use'] = knownRansomwareCampaignUse,
+    Description = shortDescription
+| sort by ['CVSS Score'] desc, DueDateInDays asc
+
+
+// =============================================================================
+// --- OPTION B: All CISA KEVs on your devices (full catalog) -----------------
+// Use in Sentinel Workbooks or ad-hoc hunting.
+// Best for: dashboards, remediation prioritization, reporting across all KEVs.
+// Summarizes by CVE showing how many devices are affected.
+// =============================================================================
+/*
+let CISA_KEV = externaldata(
+    cveID: string,
+    vendorProject: string,
+    product: string,
+    vulnerabilityName: string,
+    dateAdded: datetime,
+    shortDescription: string,
+    requiredAction: string,
+    dueDate: datetime,
+    knownRansomwareCampaignUse: string,
+    notes: string)
+    [@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
+    with (format="csv", ignoreFirstRecord=True);
+MDETVM_CL
+| where TimeGenerated > ago(1d)
+| project
+    DeviceName = deviceName_s,
+    CVEId = cveId_s,
+    OsPlatform = osPlatform_s,
+    SoftwareName = softwareName_s,
+    SoftwareVendor = softwareVendor_s,
+    Severity = vulnerabilitySeverityLevel_s,
+    CvssScore = cvssScore_d,
+    SecurityUpdateAvailable = securityUpdateAvailable_b
+| join kind=inner (CISA_KEV) on $left.CVEId == $right.cveID
+| extend DueDateInDays = datetime_diff('day', dueDate, now())
+| extend IsRansomware = knownRansomwareCampaignUse != "Unknown"
+| extend IsOverdue = dueDate < now()
+| summarize
+    ['Device Count'] = dcount(DeviceName),
+    Devices = make_set(DeviceName, 50)
+    by ['CVE ID'] = CVEId, Vulnerability = vulnerabilityName, Vendor = vendorProject, Product = product,
+       Severity, ['CVSS Score'] = CvssScore, ['Required Action'] = requiredAction,
+       ['Due Date'] = dueDate, ['Days Until Due'] = DueDateInDays, ['Ransomware Linked'] = IsRansomware, Overdue = IsOverdue
+| sort by ['Ransomware Linked'] desc, ['CVSS Score'] desc, ['Days Until Due'] asc
+*/

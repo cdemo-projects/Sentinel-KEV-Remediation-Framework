@@ -1,0 +1,194 @@
+// =============================================================================
+// Verify-MDVMTables.kql
+// =============================================================================
+// PURPOSE:
+//   Post-deployment verification queries for the MDETVM Logic App connector.
+//   Run these in Sentinel Log Analytics (Logs) after triggering the Logic App.
+//
+// USAGE:
+//   Run each query separately. Start with Query 1. Expect results within
+//   10-15 minutes of the first successful Logic App run.
+//
+// TABLE: MDETVM_CL (created by legacy HTTP Data Collector API)
+//   Fields use type suffixes: _s (string), _d (double/number), _b (boolean)
+// =============================================================================
+
+
+// =============================================================================
+// QUERY 1: Confirm MDETVM_CL table is populated
+// Run this first. Expect row count > 0 if the Logic App ran successfully.
+// =============================================================================
+
+MDETVM_CL
+| summarize
+    TotalRecords = count(),
+    Devices = dcount(deviceName_s),
+    UniqueCVEs = dcount(cveId_s),
+    MostRecent = max(TimeGenerated),
+    OldestRecord = min(TimeGenerated)
+
+
+// =============================================================================
+// QUERY 2: Inspect MDETVM_CL schema (confirm column names and type suffixes)
+// =============================================================================
+/*
+MDETVM_CL
+| getschema
+*/
+
+
+// =============================================================================
+// QUERY 3: Sample vulnerability data (spot-check)
+// =============================================================================
+/*
+MDETVM_CL
+| where TimeGenerated > ago(1d)
+| project
+    TimeGenerated,
+    DeviceName = deviceName_s,
+    CVEId = cveId_s,
+    SoftwareName = softwareName_s,
+    SoftwareVendor = softwareVendor_s,
+    Severity = vulnerabilitySeverityLevel_s,
+    CvssScore = cvssScore_d,
+    ExploitabilityLevel = exploitabilityLevel_s,
+    SecurityUpdateAvailable = securityUpdateAvailable_b,
+    OsPlatform = osPlatform_s
+| top 25 by CvssScore desc
+*/
+
+
+// =============================================================================
+// QUERY 4: CVE counts by device (coverage check)
+// =============================================================================
+/*
+MDETVM_CL
+| where TimeGenerated > ago(1d)
+| summarize
+    TotalCVEs = dcount(cveId_s),
+    Critical = countif(vulnerabilitySeverityLevel_s == "Critical"),
+    High = countif(vulnerabilitySeverityLevel_s == "High"),
+    Medium = countif(vulnerabilitySeverityLevel_s == "Medium"),
+    Low = countif(vulnerabilitySeverityLevel_s == "Low")
+    by DeviceName = deviceName_s
+| sort by Critical desc, High desc
+*/
+
+
+// =============================================================================
+// QUERY 5: Dry-run CISA KEV correlation (no dedup check)
+// If this returns rows, the analytics rule will generate incidents when enabled.
+// =============================================================================
+/*
+let CISA_KEV = externaldata(
+    cveID: string,
+    vendorProject: string,
+    product: string,
+    vulnerabilityName: string,
+    dateAdded: datetime,
+    shortDescription: string,
+    requiredAction: string,
+    dueDate: datetime,
+    knownRansomwareCampaignUse: string,
+    notes: string)
+    [@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
+    with (format="csv", ignoreFirstRecord=True);
+MDETVM_CL
+| where TimeGenerated > ago(1d)
+| project
+    DeviceName = deviceName_s,
+    CVEId = cveId_s,
+    Severity = vulnerabilitySeverityLevel_s,
+    CvssScore = cvssScore_d
+| join kind=inner (CISA_KEV) on $left.CVEId == $right.cveID
+| extend DueDateInDays = datetime_diff('day', dueDate, now())
+| project DeviceName, CVEId, Severity, CvssScore,
+    vendorProject, requiredAction, dueDate, DueDateInDays
+| sort by CvssScore desc
+*/
+
+
+// =============================================================================
+// QUERY 2: Inspect MDVMVulnerabilitiesByDevice_CL schema (key analytics table)
+// Confirms column names match what the analytics rule expects.
+// =============================================================================
+/*
+MDVMVulnerabilitiesByDevice_CL
+| getschema
+*/
+
+
+// =============================================================================
+// QUERY 3: Sample device vulnerability data
+// Spot-check: confirms devices, CVE IDs, and severity levels are populated.
+// =============================================================================
+/*
+MDVMVulnerabilitiesByDevice_CL
+| where TimeGenerated > ago(1d)
+| project TimeGenerated, deviceName, cveId, softwareName, softwareVendor,
+    softwareVersion, vulnerabilitySeverityLevel, cvssScore,
+    osPlatform, exploitabilityLevel, securityUpdateAvailable, status
+| top 25 by cvssScore desc
+*/
+
+
+// =============================================================================
+// QUERY 4: Vulnerability counts by device (coverage check)
+// Shows how many CVEs are tracked per device.
+// =============================================================================
+/*
+MDVMVulnerabilitiesByDevice_CL
+| where TimeGenerated > ago(1d)
+| where status != "Fixed"
+| summarize
+    TotalCVEs = dcount(cveId),
+    Critical = countif(vulnerabilitySeverityLevel == "Critical"),
+    High = countif(vulnerabilitySeverityLevel == "High"),
+    Medium = countif(vulnerabilitySeverityLevel == "Medium"),
+    Low = countif(vulnerabilitySeverityLevel == "Low")
+    by deviceName
+| sort by Critical desc, High desc
+*/
+
+
+// =============================================================================
+// QUERY 5: Dry-run the CISA KEV analytics rule query (no dedup check)
+// Use to validate the join produces results before enabling the analytics rule.
+// If this returns rows, the analytics rule will fire when enabled.
+// =============================================================================
+/*
+let CISA_KEV = externaldata(
+    cveID: string,
+    vendorProject: string,
+    product: string,
+    vulnerabilityName: string,
+    dateAdded: datetime,
+    shortDescription: string,
+    requiredAction: string,
+    dueDate: datetime,
+    knownRansomwareCampaignUse: string,
+    notes: string)
+    [@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
+    with (format="csv", ignoreFirstRecord=True);
+MDVMVulnerabilitiesByDevice_CL
+| where TimeGenerated > ago(1d)
+| where status != "Fixed"
+| join kind=inner (CISA_KEV) on $left.cveId == $right.cveID
+| extend DueDateInDays = datetime_diff('day', dueDate, now())
+| project deviceName, cveId, softwareName, vulnerabilitySeverityLevel, cvssScore,
+    vendorProject, product, requiredAction, dueDate, DueDateInDays,
+    knownRansomwareCampaignUse
+| sort by cvssScore desc
+*/
+
+
+// =============================================================================
+// QUERY 6: Verify NIST CVE KB has CISA KEV fields (Option C enrichment check)
+// If cisaExploitAdd is populated, the NIST table can be used instead of externaldata()
+// =============================================================================
+/*
+MDVMNISTCVEKB_CL
+| where isnotempty(cisaExploitAdd)
+| project cveId, cisaExploitAdd, cisaActionDue, cisaRequiredAction, cisaVulnerabilityName
+| top 10 by cisaExploitAdd desc
+*/

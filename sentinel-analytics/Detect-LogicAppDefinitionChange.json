@@ -1,0 +1,63 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workspace": { "type": "String" },
+        "kevRemediateLogicAppName": {
+            "type": "String",
+            "defaultValue": "KEV-Remediate"
+        },
+        "autoCloseLogicAppName": {
+            "type": "String",
+            "defaultValue": "AutoClose-KEVIncidents"
+        }
+    },
+    "resources": [
+        {
+            "id": "[concat(resourceId('Microsoft.OperationalInsights/workspaces/providers', parameters('workspace'), 'Microsoft.SecurityInsights'),'/alertRules/d4e5f6a7-1b2c-4d5e-9f8a-0b1c2d3e4f5a')]",
+            "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/d4e5f6a7-1b2c-4d5e-9f8a-0b1c2d3e4f5a')]",
+            "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+            "kind": "Scheduled",
+            "apiVersion": "2023-12-01-preview",
+            "properties": {
+                "displayName": "KEV Framework - Logic App Definition Changed",
+                "description": "Alerts when the KEV-Remediate or AutoClose-KEVIncidents Logic App definition is modified. Both Logic Apps should be locked with a ReadOnly resource lock; any successful write here means the lock was removed first. Investigate WHO removed the lock and WHY.",
+                "severity": "High",
+                "enabled": false,
+                "query": "AzureActivity\n| where TimeGenerated > ago(1h)\n| where OperationNameValue =~ 'MICROSOFT.LOGIC/WORKFLOWS/WRITE'\n| where ActivityStatusValue == 'Success'\n| extend Workflow = tostring(parse_json(tostring(Properties)).resource)\n| where Workflow in~ ('{{kevRemediateLogicAppName}}', '{{autoCloseLogicAppName}}')\n| project TimeGenerated, Workflow, Caller, CallerIpAddress, ResourceGroup, SubscriptionId, CorrelationId\n| extend AccountName = tostring(split(Caller, '@')[0])\n| extend AccountUPNSuffix = tostring(split(Caller, '@')[1])",
+                "queryFrequency": "PT15M",
+                "queryPeriod": "PT1H",
+                "triggerOperator": "GreaterThan",
+                "triggerThreshold": 0,
+                "suppressionDuration": "PT1H",
+                "suppressionEnabled": false,
+                "tactics": [ "Persistence", "DefenseEvasion" ],
+                "techniques": [ "T1098", "T1562" ],
+                "alertRuleTemplateName": null,
+                "incidentConfiguration": {
+                    "createIncident": true,
+                    "groupingConfiguration": {
+                        "enabled": true,
+                        "reopenClosedIncident": false,
+                        "lookbackDuration": "PT24H",
+                        "matchingMethod": "AllEntities"
+                    }
+                },
+                "eventGroupingSettings": { "aggregationKind": "SingleAlert" },
+                "entityMappings": [
+                    {
+                        "entityType": "Account",
+                        "fieldMappings": [
+                            { "identifier": "Name", "columnName": "AccountName" },
+                            { "identifier": "UPNSuffix", "columnName": "AccountUPNSuffix" }
+                        ]
+                    },
+                    {
+                        "entityType": "IP",
+                        "fieldMappings": [ { "identifier": "Address", "columnName": "CallerIpAddress" } ]
+                    }
+                ]
+            }
+        }
+    ]
+}

@@ -1,0 +1,414 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "# CISA KEV to MDVM Findings Correlation\n\nCorrelates CISA's [Known Exploited Vulnerabilities (KEV) catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) - CVEs confirmed to be actively exploited in the wild - against live Microsoft Defender Vulnerability Management (MDVM) findings from every onboarded device in the tenant.\n\nUse this workbook to:\n- See exactly **which KEV CVEs are present on which devices right now**, with the CVE name, affected software, CVSS score, and CISA-mandated remediation due date.\n- Prioritize patching by **ransomware association** (CVEs CISA flags as used in known ransomware campaigns) and by **BOD due date** (Past Due / Due < 14d).\n- Identify the **most exposed devices** and the **software products driving the most KEV exposure**, so remediation effort lands where it removes the most risk.\n\n**Data source:** Native Microsoft Defender XDR Advanced Hunting tables (`DeviceTvmSoftwareVulnerabilities` and `DeviceTvmSoftwareVulnerabilitiesKB`). No custom Log Analytics table, Logic App, or Data Collection Rule is required. After import, select the Sentinel workspace when prompted by the workbook's **Advanced hunting** data source.\n\nDrafting assistance: Claude Opus 4.8 (via GitHub Copilot), grounded in official Microsoft Learn documentation."
+      }
+    },
+    {
+      "type": 11,
+      "content": {
+        "version": "LinkItem/1.0",
+        "style": "tabs",
+        "links": [
+          {
+            "id": "kev-tab",
+            "cellValue": "tab",
+            "linkTarget": "parameter",
+            "linkLabel": "KEV Exposure",
+            "subTarget": "kev",
+            "preText": "",
+            "style": "link"
+          },
+          {
+            "id": "cve-tab",
+            "cellValue": "tab",
+            "linkTarget": "parameter",
+            "linkLabel": "All CVEs",
+            "subTarget": "cve",
+            "preText": "",
+            "style": "link"
+          }
+        ]
+      },
+      "name": "tabs"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "timerange",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Time range",
+            "type": 4,
+            "value": {
+              "durationMs": 2592000000
+            },
+            "typeSettings": {
+              "selectableValues": [
+                {
+                  "durationMs": 86400000
+                },
+                {
+                  "durationMs": 604800000
+                },
+                {
+                  "durationMs": 2592000000
+                },
+                {
+                  "durationMs": 7776000000
+                }
+              ]
+            }
+          },
+          {
+            "id": "deviceName-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "DeviceName",
+            "label": "Device",
+            "type": 2,
+            "isRequired": true,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "query": "{\"__advancedHuntingSettings\":true,\"query\":\"DeviceTvmSoftwareVulnerabilities\\r\\n| distinct DeviceName\\r\\n| order by DeviceName asc\",\"selectedWorkspaceIds\":[]}",
+            "typeSettings": {
+              "additionalResourceOptions": [
+                "value::all"
+              ],
+              "showDefault": false
+            },
+            "queryType": "advancedHunting",
+            "crossComponentResources": [],
+            "value": [
+              "value::all"
+            ]
+          },
+          {
+            "id": "cveId-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "CveId",
+            "label": "CVE ID",
+            "type": 2,
+            "isRequired": true,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "query": "{\"__advancedHuntingSettings\":true,\"query\":\"DeviceTvmSoftwareVulnerabilities\\r\\n| distinct CveId\\r\\n| order by CveId asc\",\"selectedWorkspaceIds\":[]}",
+            "typeSettings": {
+              "additionalResourceOptions": [
+                "value::all"
+              ],
+              "showDefault": false
+            },
+            "queryType": "advancedHunting",
+            "crossComponentResources": [],
+            "value": [
+              "value::all"
+            ]
+          },
+          {
+            "id": "vulnName-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "VulnerabilityName",
+            "label": "Vulnerability name (CISA)",
+            "type": 2,
+            "isRequired": true,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "query": "{\"__advancedHuntingSettings\":true,\"query\":\"let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string, cwes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=true);\\r\\nDeviceTvmSoftwareVulnerabilities\\r\\n| distinct CveId\\r\\n| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID\\r\\n| distinct vulnerabilityName\\r\\n| order by vulnerabilityName asc\",\"selectedWorkspaceIds\":[]}",
+            "typeSettings": {
+              "additionalResourceOptions": [
+                "value::all"
+              ],
+              "showDefault": false
+            },
+            "queryType": "advancedHunting",
+            "crossComponentResources": [],
+            "value": [
+              "value::all"
+            ]
+          },
+          {
+            "id": "vendor-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "VendorProject",
+            "label": "Vendor (CISA)",
+            "type": 2,
+            "isRequired": true,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "query": "{\"__advancedHuntingSettings\":true,\"query\":\"let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string, cwes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=true);\\r\\nDeviceTvmSoftwareVulnerabilities\\r\\n| distinct CveId\\r\\n| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID\\r\\n| distinct vendorProject\\r\\n| order by vendorProject asc\",\"selectedWorkspaceIds\":[]}",
+            "typeSettings": {
+              "additionalResourceOptions": [
+                "value::all"
+              ],
+              "showDefault": false
+            },
+            "queryType": "advancedHunting",
+            "crossComponentResources": [],
+            "value": [
+              "value::all"
+            ]
+          },
+          {
+            "id": "product-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "Product",
+            "label": "Product (CISA)",
+            "type": 2,
+            "isRequired": true,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "query": "{\"__advancedHuntingSettings\":true,\"query\":\"let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string, cwes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=true);\\r\\nDeviceTvmSoftwareVulnerabilities\\r\\n| distinct CveId\\r\\n| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID\\r\\n| distinct product\\r\\n| order by product asc\",\"selectedWorkspaceIds\":[]}",
+            "typeSettings": {
+              "additionalResourceOptions": [
+                "value::all"
+              ],
+              "showDefault": false
+            },
+            "queryType": "advancedHunting",
+            "crossComponentResources": [],
+            "value": [
+              "value::all"
+            ]
+          }
+        ]
+      },
+      "name": "params"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## KEV Exposure Summary"
+      },
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "kev"
+      }
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "{\"__advancedHuntingSettings\":true,\"query\":\"let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string, cwes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=true);\\r\\nlet KEV = DeviceTvmSoftwareVulnerabilities\\r\\n  | where DeviceName in ({DeviceName}) or '*' in ({DeviceName})\\r\\n  | where CveId in ({CveId}) or '*' in ({CveId})\\r\\n  | join kind=inner (CISA_KEV) on $left.CveId == $right.cveID\\r\\n  | where vulnerabilityName in ({VulnerabilityName}) or '*' in ({VulnerabilityName})\\r\\n  | where vendorProject in ({VendorProject}) or '*' in ({VendorProject})\\r\\n  | where product in ({Product}) or '*' in ({Product});\\r\\nlet Stats = KEV\\r\\n  | summarize KEVMatches=count(), UniqueCVEs=dcount(CveId), AffectedDevices=dcount(DeviceName), RansomwareCVEs=dcountif(CveId, knownRansomwareCampaignUse != 'Unknown'), PastDue=countif(dueDate < now());\\r\\nStats\\r\\n| mv-expand Metric=pack_array('KEV Matches','Unique CVEs','Affected Devices','Ransomware CVEs','Past Due') to typeof(string), Value=pack_array(KEVMatches, UniqueCVEs, AffectedDevices, RansomwareCVEs, PastDue) to typeof(long)\\r\\n| project Metric, Value\",\"selectedWorkspaceIds\":[]}",
+        "size": 4,
+        "queryType": "advancedHunting",
+        "visualization": "tiles",
+        "tileSettings": {
+          "titleContent": {
+            "columnMatch": "Metric",
+            "formatter": 1
+          },
+          "leftContent": {
+            "columnMatch": "Value",
+            "formatter": 12,
+            "formatOptions": {
+              "palette": "auto"
+            }
+          },
+          "showBorder": true,
+          "size": "auto"
+        },
+        "crossComponentResources": []
+      },
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "kev"
+      },
+      "name": "kev-tiles"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "{\"__advancedHuntingSettings\":true,\"query\":\"let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string, cwes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=true);\\r\\nlet KB = DeviceTvmSoftwareVulnerabilitiesKB | summarize arg_max(LastModifiedTime, *) by CveId | project CveId, CvssScore=todouble(CvssScore), IsExploitAvailable;\\r\\nDeviceTvmSoftwareVulnerabilities\\r\\n| where DeviceName in ({DeviceName}) or '*' in ({DeviceName})\\r\\n| where CveId in ({CveId}) or '*' in ({CveId})\\r\\n| join kind=leftouter KB on CveId\\r\\n| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID\\r\\n| where vulnerabilityName in ({VulnerabilityName}) or '*' in ({VulnerabilityName})\\r\\n| where vendorProject in ({VendorProject}) or '*' in ({VendorProject})\\r\\n| where product in ({Product}) or '*' in ({Product})\\r\\n| extend DaysUntilDue=datetime_diff('day', dueDate, now())\\r\\n| extend DueStatus=case(DaysUntilDue < 0, 'Past Due', DaysUntilDue < 14, 'Due < 14d', 'Due > 14d'), SecurityUpdateAvailable=isnotempty(RecommendedSecurityUpdateId) or isnotempty(RecommendedSecurityUpdate)\\r\\n| sort by DueStatus asc, CvssScore desc\\r\\n| project ['Device Name']=DeviceName, ['CVE ID']=CveId, Vulnerability=vulnerabilityName, Description=shortDescription, Vendor=vendorProject, Product=product, Software=SoftwareName, Version=SoftwareVersion, Severity=VulnerabilitySeverityLevel, ['CVSS Score']=CvssScore, ['Ransomware Use']=knownRansomwareCampaignUse, ['Due Date']=dueDate, ['Due Status']=DueStatus, ['Recommended Update']=RecommendedSecurityUpdate, ['Update Available']=SecurityUpdateAvailable\",\"selectedWorkspaceIds\":[]}",
+        "size": 0,
+        "title": "Active KEV findings (all devices)",
+        "queryType": "advancedHunting",
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "cvssScore",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "redGreen",
+                "min": 0,
+                "max": 10
+              }
+            },
+            {
+              "columnMatch": "DueStatus",
+              "formatter": 11
+            },
+            {
+              "columnMatch": "vulnerabilitySeverityLevel",
+              "formatter": 11
+            }
+          ]
+        },
+        "crossComponentResources": []
+      },
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "kev"
+      },
+      "name": "kev-findings"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "{\"__advancedHuntingSettings\":true,\"query\":\"let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string, cwes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=true);\\r\\nDeviceTvmSoftwareVulnerabilities\\r\\n| where DeviceName in ({DeviceName}) or '*' in ({DeviceName})\\r\\n| where CveId in ({CveId}) or '*' in ({CveId})\\r\\n| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID\\r\\n| where vulnerabilityName in ({VulnerabilityName}) or '*' in ({VulnerabilityName})\\r\\n| where vendorProject in ({VendorProject}) or '*' in ({VendorProject})\\r\\n| where product in ({Product}) or '*' in ({Product})\\r\\n| summarize ['KEV Count']=dcount(CveId) by ['Device Name']=DeviceName\\r\\n| top 10 by ['KEV Count'] desc\",\"selectedWorkspaceIds\":[]}",
+        "size": 0,
+        "title": "Top 10 devices by KEV count",
+        "queryType": "advancedHunting",
+        "visualization": "barchart",
+        "crossComponentResources": []
+      },
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "kev"
+      },
+      "customWidth": "50",
+      "name": "kev-topdevices"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "{\"__advancedHuntingSettings\":true,\"query\":\"let CISA_KEV = externaldata(cveID:string, vendorProject:string, product:string, vulnerabilityName:string, dateAdded:datetime, shortDescription:string, requiredAction:string, dueDate:datetime, knownRansomwareCampaignUse:string, notes:string, cwes:string)[@'https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv'] with (format='csv', ignoreFirstRecord=true);\\r\\nDeviceTvmSoftwareVulnerabilities\\r\\n| where DeviceName in ({DeviceName}) or '*' in ({DeviceName})\\r\\n| where CveId in ({CveId}) or '*' in ({CveId})\\r\\n| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID\\r\\n| where vulnerabilityName in ({VulnerabilityName}) or '*' in ({VulnerabilityName})\\r\\n| where vendorProject in ({VendorProject}) or '*' in ({VendorProject})\\r\\n| where product in ({Product}) or '*' in ({Product})\\r\\n| summarize Count=count() by Software=SoftwareName\\r\\n| top 10 by Count desc\",\"selectedWorkspaceIds\":[]}",
+        "size": 0,
+        "title": "Top 10 software products by KEV count",
+        "queryType": "advancedHunting",
+        "visualization": "piechart",
+        "crossComponentResources": []
+      },
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "kev"
+      },
+      "customWidth": "50",
+      "name": "kev-topsoftware"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### All CVE Exposure\nAll current vulnerabilities from the native `DeviceTvmSoftwareVulnerabilities` table - not filtered to CISA KEVs."
+      },
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "cve"
+      },
+      "name": "cve-header"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "{\"__advancedHuntingSettings\":true,\"query\":\"DeviceTvmSoftwareVulnerabilities\\r\\n| summarize CVECount=dcount(CveId), CriticalCount=dcountif(CveId, VulnerabilitySeverityLevel == 'Critical'), HighCount=dcountif(CveId, VulnerabilitySeverityLevel == 'High'), MediumCount=dcountif(CveId, VulnerabilitySeverityLevel == 'Medium'), LowCount=dcountif(CveId, VulnerabilitySeverityLevel == 'Low') by DeviceName\\r\\n| project deviceName=DeviceName, CVECount, CriticalCount, HighCount, MediumCount, LowCount\\r\\n| sort by CVECount desc\",\"selectedWorkspaceIds\":[]}",
+        "size": 0,
+        "title": "CVE Count by Device",
+        "queryType": "advancedHunting",
+        "visualization": "table",
+        "gridSettings": {
+          "sortBy": [
+            {
+              "itemKey": "CVECount",
+              "sortOrder": 2
+            }
+          ]
+        },
+        "crossComponentResources": []
+      },
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "cve"
+      },
+      "name": "cve-device-table"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "{\"__advancedHuntingSettings\":true,\"query\":\"DeviceTvmSoftwareVulnerabilities\\r\\n| summarize CVECount=dcount(CveId) by VulnerabilitySeverityLevel\\r\\n| project vulnerabilitySeverityLevel=VulnerabilitySeverityLevel, CVECount\\r\\n| sort by CVECount desc\",\"selectedWorkspaceIds\":[]}",
+        "size": 2,
+        "title": "CVEs by Severity",
+        "queryType": "advancedHunting",
+        "visualization": "piechart",
+        "crossComponentResources": []
+      },
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "cve"
+      },
+      "customWidth": "50",
+      "name": "cve-severity-chart"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "{\"__advancedHuntingSettings\":true,\"query\":\"DeviceTvmSoftwareVulnerabilities\\r\\n| summarize CVECount=dcount(CveId), Devices=dcount(DeviceName) by SoftwareName, SoftwareVendor\\r\\n| project softwareName=SoftwareName, softwareVendor=SoftwareVendor, CVECount, Devices\\r\\n| sort by CVECount desc\\r\\n| take 20\",\"selectedWorkspaceIds\":[]}",
+        "size": 0,
+        "title": "Top 20 Software by CVE Count",
+        "queryType": "advancedHunting",
+        "visualization": "table",
+        "crossComponentResources": []
+      },
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "cve"
+      },
+      "customWidth": "50",
+      "name": "cve-software-table"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "{\"__advancedHuntingSettings\":true,\"query\":\"let KB = DeviceTvmSoftwareVulnerabilitiesKB | summarize arg_max(LastModifiedTime, *) by CveId | project CveId, CvssScore=todouble(CvssScore), IsExploitAvailable;\\r\\nDeviceTvmSoftwareVulnerabilities\\r\\n| join kind=leftouter KB on CveId\\r\\n| project cveId=CveId, deviceName=DeviceName, softwareName=SoftwareName, softwareVendor=SoftwareVendor, Severity=VulnerabilitySeverityLevel, CVSS=CvssScore, KB=RecommendedSecurityUpdateId, Exploitability=iff(IsExploitAvailable, 'ExploitAvailable', 'NoKnownExploit')\\r\\n| sort by CVSS desc, Severity asc\",\"selectedWorkspaceIds\":[]}",
+        "size": 0,
+        "title": "All CVE Findings (Latest Snapshot)",
+        "queryType": "advancedHunting",
+        "visualization": "table",
+        "gridSettings": {
+          "filter": true,
+          "sortBy": [
+            {
+              "itemKey": "CVSS",
+              "sortOrder": 2
+            }
+          ]
+        },
+        "crossComponentResources": []
+      },
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "cve"
+      },
+      "name": "cve-findings-table"
+    }
+  ],
+  "fromTemplateId": "mdetvm-kev-correlation-workbook-native",
+  "styleSettings": {}
+}

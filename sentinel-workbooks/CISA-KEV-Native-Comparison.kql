@@ -1,0 +1,89 @@
+// =============================================================================
+// CISA-KEV-Native-Comparison.kql
+// =============================================================================
+// Compares current Microsoft Defender Vulnerability Management findings with
+// the live CISA Known Exploited Vulnerabilities catalog. This query uses native
+// Defender XDR Advanced Hunting tables and does not require MDETVM_CL, a Logic
+// App, a Data Collection Rule, or duplicate ingestion into Log Analytics.
+//
+// Run in:
+//   Microsoft Defender portal > Hunting > Advanced hunting
+//   https://security.microsoft.com/v2/advanced-hunting
+//
+// Native tables:
+//   DeviceTvmSoftwareVulnerabilities
+//   DeviceTvmSoftwareVulnerabilitiesKB
+//
+// Drafting assistance: Claude Opus 4.8 (via GitHub Copilot), grounded in
+// official Microsoft Learn documentation and the live CISA KEV catalog.
+// =============================================================================
+
+let CISA_KEV = externaldata(
+    cveID: string,
+    vendorProject: string,
+    product: string,
+    vulnerabilityName: string,
+    dateAdded: datetime,
+    shortDescription: string,
+    requiredAction: string,
+    dueDate: datetime,
+    knownRansomwareCampaignUse: string,
+    notes: string,
+    cwes: string
+)
+[@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
+with (format="csv", ignoreFirstRecord=true);
+let VulnerabilityKnowledgeBase =
+    DeviceTvmSoftwareVulnerabilitiesKB
+    | summarize arg_max(LastModifiedTime, *) by CveId
+    | project
+        CveId,
+        CvssScore = todouble(CvssScore),
+        IsExploitAvailable,
+        PublishedDate,
+        VulnerabilityDescription;
+DeviceTvmSoftwareVulnerabilities
+| where isnotempty(CveId) and isnotempty(DeviceId)
+| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID
+| join kind=leftouter (VulnerabilityKnowledgeBase) on CveId
+| extend
+    IsOverdue = dueDate < now(),
+    DaysUntilDue = datetime_diff("day", dueDate, now()),
+    IsRansomwareLinked = knownRansomwareCampaignUse != "Unknown",
+    SecurityUpdateAvailable =
+        isnotempty(RecommendedSecurityUpdateId)
+        or isnotempty(RecommendedSecurityUpdate)
+| project
+    DeviceName,
+    DeviceId,
+    OSPlatform,
+    OSVersion,
+    CveId,
+    VulnerabilitySeverityLevel,
+    CvssScore,
+    IsExploitAvailable,
+    CveTags,
+    SoftwareVendor,
+    SoftwareName,
+    SoftwareVersion,
+    RecommendedSecurityUpdate,
+    RecommendedSecurityUpdateId,
+    SecurityUpdateAvailable,
+    vendorProject,
+    product,
+    vulnerabilityName,
+    shortDescription,
+    requiredAction,
+    dateAdded,
+    dueDate,
+    DaysUntilDue,
+    IsOverdue,
+    IsRansomwareLinked,
+    knownRansomwareCampaignUse,
+    cwes
+| order by
+    IsRansomwareLinked desc,
+    IsOverdue desc,
+    CvssScore desc,
+    dueDate asc,
+    DeviceName asc

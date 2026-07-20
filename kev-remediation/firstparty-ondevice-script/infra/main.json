@@ -1,0 +1,235 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.41.2.15936",
+      "templateHash": "18047731393040596620"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for the Logic App."
+      }
+    },
+    "logicAppName": {
+      "type": "string",
+      "defaultValue": "la-kev-patch-poc",
+      "metadata": {
+        "description": "Name of the Consumption Logic App."
+      }
+    },
+    "mdeResourceBase": {
+      "type": "string",
+      "defaultValue": "https://api.security.microsoft.com",
+      "metadata": {
+        "description": "Defender for Endpoint API base (worldwide for Commercial + true GCC)."
+      }
+    },
+    "mdeAudience": {
+      "type": "string",
+      "defaultValue": "https://api.securitycenter.microsoft.com",
+      "metadata": {
+        "description": "Token AUDIENCE/resource for the Defender for Endpoint API (legacy resource still required)."
+      }
+    },
+    "graphBase": {
+      "type": "string",
+      "defaultValue": "https://graph.microsoft.com",
+      "metadata": {
+        "description": "Microsoft Graph base (worldwide for Commercial + true GCC)."
+      }
+    },
+    "kevFeedUrl": {
+      "type": "string",
+      "defaultValue": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+      "metadata": {
+        "description": "Public CISA Known Exploited Vulnerabilities JSON feed."
+      }
+    },
+    "scriptPolicyId": {
+      "type": "string",
+      "defaultValue": "00000000-0000-0000-0000-000000000000",
+      "metadata": {
+        "description": "Intune Remediation (deviceHealthScript) policy ID to run on exposed devices."
+      }
+    },
+    "sinceHours": {
+      "type": "int",
+      "defaultValue": 6,
+      "metadata": {
+        "description": "Look-back window (hours) for the MDVM delta pull. Match the recurrence."
+      }
+    }
+  },
+  "variables": {
+    "$fxv#0": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "parameters": {
+        "mdeResourceBase": {
+          "type": "String"
+        },
+        "mdeAudience": {
+          "type": "String"
+        },
+        "graphBase": {
+          "type": "String"
+        },
+        "kevFeedUrl": {
+          "type": "String"
+        },
+        "scriptPolicyId": {
+          "type": "String"
+        },
+        "sinceHours": {
+          "type": "Int"
+        }
+      },
+      "triggers": {
+        "Recurrence": {
+          "type": "Recurrence",
+          "recurrence": {
+            "frequency": "Hour",
+            "interval": 6
+          }
+        }
+      },
+      "actions": {
+        "Get_CISA_KEV": {
+          "type": "Http",
+          "runAfter": {},
+          "inputs": {
+            "method": "GET",
+            "uri": "@parameters('kevFeedUrl')"
+          }
+        },
+        "Get_MDVM_Delta": {
+          "type": "Http",
+          "runAfter": {
+            "Get_CISA_KEV": [
+              "Succeeded"
+            ]
+          },
+          "inputs": {
+            "method": "GET",
+            "uri": "@{parameters('mdeResourceBase')}/api/machines/SoftwareVulnerabilityChangesByMachine",
+            "queries": {
+              "sinceTime": "@{formatDateTime(addHours(utcNow(), mul(parameters('sinceHours'), -1)), 'yyyy-MM-ddTHH:mm:ssZ')}"
+            },
+            "authentication": {
+              "type": "ManagedServiceIdentity",
+              "audience": "@parameters('mdeAudience')"
+            }
+          }
+        },
+        "Select_KEV_CVEs": {
+          "type": "Select",
+          "runAfter": {
+            "Get_MDVM_Delta": [
+              "Succeeded"
+            ]
+          },
+          "inputs": {
+            "from": "@coalesce(body('Get_CISA_KEV')?['vulnerabilities'], json('[]'))",
+            "select": "@item()?['cveID']"
+          }
+        },
+        "Filter_KEV_Exposed": {
+          "type": "Query",
+          "runAfter": {
+            "Select_KEV_CVEs": [
+              "Succeeded"
+            ]
+          },
+          "inputs": {
+            "from": "@coalesce(body('Get_MDVM_Delta')?['value'], json('[]'))",
+            "where": "@and(contains(body('Select_KEV_CVEs'), item()?['CveId']), equals(item()?['Status'], 'New'))"
+          }
+        },
+        "For_each_Exposed": {
+          "type": "Foreach",
+          "runAfter": {
+            "Filter_KEV_Exposed": [
+              "Succeeded"
+            ]
+          },
+          "foreach": "@body('Filter_KEV_Exposed')",
+          "actions": {
+            "Trigger_Remediation": {
+              "type": "Http",
+              "runAfter": {},
+              "inputs": {
+                "method": "POST",
+                "uri": "@{parameters('graphBase')}/beta/deviceManagement/managedDevices/@{items('For_each_Exposed')?['DeviceId']}/initiateOnDemandProactiveRemediation",
+                "body": {
+                  "scriptPolicyId": "@parameters('scriptPolicyId')"
+                },
+                "authentication": {
+                  "type": "ManagedServiceIdentity",
+                  "audience": "@parameters('graphBase')"
+                }
+              }
+            }
+          }
+        }
+      },
+      "outputs": {}
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('logicAppName')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "state": "Enabled",
+        "definition": "[variables('$fxv#0')]",
+        "parameters": {
+          "mdeResourceBase": {
+            "value": "[parameters('mdeResourceBase')]"
+          },
+          "mdeAudience": {
+            "value": "[parameters('mdeAudience')]"
+          },
+          "graphBase": {
+            "value": "[parameters('graphBase')]"
+          },
+          "kevFeedUrl": {
+            "value": "[parameters('kevFeedUrl')]"
+          },
+          "scriptPolicyId": {
+            "value": "[parameters('scriptPolicyId')]"
+          },
+          "sinceHours": {
+            "value": "[parameters('sinceHours')]"
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "managedIdentityPrincipalId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object (principal) ID of the Logic App managed identity - feed this to Grant-GraphPermissions.ps1."
+      },
+      "value": "[reference(resourceId('Microsoft.Logic/workflows', parameters('logicAppName')), '2019-05-01', 'full').identity.principalId]"
+    },
+    "logicAppName": {
+      "type": "string",
+      "metadata": {
+        "description": "Logic App resource name."
+      },
+      "value": "[parameters('logicAppName')]"
+    }
+  }
+}

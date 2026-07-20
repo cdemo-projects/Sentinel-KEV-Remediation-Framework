@@ -1,0 +1,498 @@
+{
+  "$comment": "v3 production snippet. Replaces Path_B_Third_Party_Approval. Ring-based group-membership orchestration with audit writes to Sentinel custom table KEVRemediation_CL. Designed for incidents up to ~1000 devices per ring (Foreach concurrency limit). For >1000-per-ring, Phase 7 swaps Foreach for $batch.",
+  "$contract": {
+    "requires": {
+      "actions": [ "Parse_Query_Results" ],
+      "variables": [ "DeviceIds" ],
+      "parameters": [
+        "GraphApiBase",
+        "Win32MappingUrl",
+        "AuditIngestionUrl",
+        "AuditIngestionAudience",
+        "WorkspaceName",
+        "ResourceGroupName",
+        "SubscriptionId",
+        "ManagementBaseUrl"
+      ],
+      "permissions": [
+        "DeviceManagementApps.ReadWrite.All",
+        "GroupMember.ReadWrite.All",
+        "Group.Read.All",
+        "DeviceManagementManagedDevices.PrivilegedOperations.All",
+        "DeviceManagementManagedDevices.Read.All"
+      ]
+    },
+    "produces": {
+      "variables": [
+        "Win32_AppMapping",
+        "Win32_AffectedDevices",
+        "Win32_PilotDevices",
+        "Win32_EarlyDevices",
+        "Win32_BroadDevices",
+        "Win32_PilotFailureRate",
+        "Win32_EarlyFailureRate",
+        "Win32_PilotMembersAccum",
+        "Win32_EarlyMembersAccum"
+      ],
+      "auditTable": "KEVRemediation_CL"
+    }
+  },
+  "Path_B_Win32_App_Assignment": {
+    "type": "Scope",
+    "actions": {
+
+      "1_Init_Variables": {
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            { "name": "Win32_AppMapping", "type": "object", "value": {} },
+            { "name": "Win32_AffectedDevices", "type": "array", "value": [] },
+            { "name": "Win32_PilotDevices", "type": "array", "value": [] },
+            { "name": "Win32_EarlyDevices", "type": "array", "value": [] },
+            { "name": "Win32_BroadDevices", "type": "array", "value": [] },
+            { "name": "Win32_PilotMembersAccum", "type": "array", "value": [] },
+            { "name": "Win32_EarlyMembersAccum", "type": "array", "value": [] },
+            { "name": "Win32_PilotFailureRate", "type": "float", "value": 0 },
+            { "name": "Win32_EarlyFailureRate", "type": "float", "value": 0 },
+            { "name": "Win32_PilotPageUrl", "type": "string", "value": "" },
+            { "name": "Win32_EarlyPageUrl", "type": "string", "value": "" }
+          ]
+        }
+      },
+
+      "2_Get_Mapping": {
+        "type": "Http",
+        "runAfter": { "1_Init_Variables": [ "Succeeded" ] },
+        "inputs": {
+          "method": "GET",
+          "uri": "@parameters('Win32MappingUrl')",
+          "headers": { "x-ms-version": "2021-08-06" },
+          "authentication": { "type": "ManagedServiceIdentity", "audience": "https://storage.azure.com" }
+        }
+      },
+
+      "3_Find_App_For_CVE": {
+        "type": "Compose",
+        "runAfter": { "2_Get_Mapping": [ "Succeeded" ] },
+        "inputs": "@body('2_Get_Mapping')?['cveIndex']?[split(split(outputs('Extract_CVE_and_KB_from_Title')?['title'], ': ')[1], ' on ')[0]]"
+      },
+
+      "4_If_App_Found_And_Not_Excluded": {
+        "type": "If",
+        "runAfter": { "3_Find_App_For_CVE": [ "Succeeded" ] },
+        "expression": {
+          "and": [
+            { "not": { "equals": [ "@outputs('3_Find_App_For_CVE')", null ] } },
+            { "not": { "equals": [ "@coalesce(outputs('3_Find_App_For_CVE')?['excludeFromAutomation'], false)", true ] } },
+            { "greater": [ "@length(coalesce(outputs('3_Find_App_For_CVE')?['intuneAppPatchGroupId'], ''))", 0 ] }
+          ]
+        },
+        "actions": {
+
+          "4a_Set_AppMapping": {
+            "type": "SetVariable",
+            "inputs": { "name": "Win32_AppMapping", "value": "@outputs('3_Find_App_For_CVE')" }
+          },
+
+          "4b_Set_AffectedDevices": {
+            "type": "SetVariable",
+            "runAfter": { "4a_Set_AppMapping": [ "Succeeded" ] },
+            "inputs": { "name": "Win32_AffectedDevices", "value": "@variables('DeviceIds')" }
+          },
+
+          "4c_Audit_Decision": {
+            "type": "Http",
+            "runAfter": { "4b_Set_AffectedDevices": [ "Succeeded" ] },
+            "inputs": {
+              "method": "POST",
+              "uri": "@parameters('AuditIngestionUrl')",
+              "headers": { "Content-Type": "application/json" },
+              "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('AuditIngestionAudience')" },
+              "body": [
+                {
+                  "TimeGenerated": "@{utcNow()}",
+                  "incidentName": "@{outputs('Extract_CVE_and_KB_from_Title')?['incidentName']}",
+                  "cveId": "@{outputs('Parse_Query_Results')?['cveId']}",
+                  "appKey": "@{variables('Win32_AppMapping')?['appKey']}",
+                  "intuneAppId": "@{variables('Win32_AppMapping')?['intuneAppId']}",
+                  "intuneAppDisplayName": "@{variables('Win32_AppMapping')?['intuneAppDisplayName']}",
+                  "intuneAppPatchGroupId": "@{variables('Win32_AppMapping')?['intuneAppPatchGroupId']}",
+                  "softwareVendor": "@{outputs('Parse_Query_Results')?['softwareVendor']}",
+                  "softwareName": "@{outputs('Parse_Query_Results')?['softwareName']}",
+                  "wave": "MappingDecision",
+                  "action": "match-found",
+                  "outcome": "proceed-to-rings",
+                  "logicAppRunId": "@{workflow()?['run']?['name']}"
+                }
+              ]
+            }
+          },
+
+          "5_Init_Pilot_Page_Url": {
+            "type": "SetVariable",
+            "runAfter": { "4c_Audit_Decision": [ "Succeeded", "Failed" ] },
+            "inputs": {
+              "name": "Win32_PilotPageUrl",
+              "value": "@{concat(parameters('GraphApiBase'), '/v1.0/groups/', body('2_Get_Mapping')?['ringStrategy']?['pilotGroupId'], '/members?$select=id&$top=999')}"
+            }
+          },
+
+          "5a_Get_Pilot_Members_Paged": {
+            "type": "Until",
+            "runAfter": { "5_Init_Pilot_Page_Url": [ "Succeeded" ] },
+            "expression": "@equals(variables('Win32_PilotPageUrl'), '')",
+            "limit": { "count": 50, "timeout": "PT5M" },
+            "actions": {
+              "Get_Pilot_Page": {
+                "type": "Http",
+                "inputs": {
+                  "method": "GET",
+                  "uri": "@variables('Win32_PilotPageUrl')",
+                  "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('GraphApiBase')" }
+                }
+              },
+              "Append_Pilot_Members": {
+                "type": "SetVariable",
+                "runAfter": { "Get_Pilot_Page": [ "Succeeded" ] },
+                "inputs": { "name": "Win32_PilotMembersAccum", "value": "@union(variables('Win32_PilotMembersAccum'), body('Get_Pilot_Page')?['value'])" }
+              },
+              "Set_Next_Pilot_Url": {
+                "type": "SetVariable",
+                "runAfter": { "Append_Pilot_Members": [ "Succeeded" ] },
+                "inputs": { "name": "Win32_PilotPageUrl", "value": "@coalesce(body('Get_Pilot_Page')?['@odata.nextLink'], '')" }
+              }
+            }
+          },
+
+          "6_Init_Early_Page_Url": {
+            "type": "SetVariable",
+            "runAfter": { "5a_Get_Pilot_Members_Paged": [ "Succeeded" ] },
+            "inputs": {
+              "name": "Win32_EarlyPageUrl",
+              "value": "@{concat(parameters('GraphApiBase'), '/v1.0/groups/', body('2_Get_Mapping')?['ringStrategy']?['earlyGroupId'], '/members?$select=id&$top=999')}"
+            }
+          },
+
+          "6a_Get_Early_Members_Paged": {
+            "type": "Until",
+            "runAfter": { "6_Init_Early_Page_Url": [ "Succeeded" ] },
+            "expression": "@equals(variables('Win32_EarlyPageUrl'), '')",
+            "limit": { "count": 50, "timeout": "PT10M" },
+            "actions": {
+              "Get_Early_Page": {
+                "type": "Http",
+                "inputs": {
+                  "method": "GET",
+                  "uri": "@variables('Win32_EarlyPageUrl')",
+                  "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('GraphApiBase')" }
+                }
+              },
+              "Append_Early_Members": {
+                "type": "SetVariable",
+                "runAfter": { "Get_Early_Page": [ "Succeeded" ] },
+                "inputs": { "name": "Win32_EarlyMembersAccum", "value": "@union(variables('Win32_EarlyMembersAccum'), body('Get_Early_Page')?['value'])" }
+              },
+              "Set_Next_Early_Url": {
+                "type": "SetVariable",
+                "runAfter": { "Append_Early_Members": [ "Succeeded" ] },
+                "inputs": { "name": "Win32_EarlyPageUrl", "value": "@coalesce(body('Get_Early_Page')?['@odata.nextLink'], '')" }
+              }
+            }
+          },
+
+          "7_Compute_Pilot_Affected": {
+            "type": "SetVariable",
+            "runAfter": { "6a_Get_Early_Members_Paged": [ "Succeeded" ] },
+            "inputs": {
+              "name": "Win32_PilotDevices",
+              "value": "@intersection(variables('Win32_AffectedDevices'), variables('Win32_PilotMembersAccum'))"
+            },
+            "$comment": "Devices in BOTH the affected list AND the Pilot ring."
+          },
+
+          "8_Compute_Early_Affected": {
+            "type": "SetVariable",
+            "runAfter": { "7_Compute_Pilot_Affected": [ "Succeeded" ] },
+            "inputs": {
+              "name": "Win32_EarlyDevices",
+              "value": "@intersection(variables('Win32_AffectedDevices'), variables('Win32_EarlyMembersAccum'))"
+            }
+          },
+
+          "9_Compute_Broad_Affected": {
+            "type": "SetVariable",
+            "runAfter": { "8_Compute_Early_Affected": [ "Succeeded" ] },
+            "inputs": {
+              "name": "Win32_BroadDevices",
+              "value": "@variables('Win32_AffectedDevices')",
+              "$comment": "PoC: Broad = all affected devices. In production, filter out Pilot/Early (requires Standard or ForEach-based exclusion)."
+            },
+            "$comment": "Broad = AffectedDevices MINUS Pilot MINUS Early. Filter out devices that are already in Pilot or Early so they don't get double-processed."
+          },
+
+          "9a_Audit_Ring_Plan": {
+            "type": "Http",
+            "runAfter": { "9_Compute_Broad_Affected": [ "Succeeded" ] },
+            "inputs": {
+              "method": "POST",
+              "uri": "@parameters('AuditIngestionUrl')",
+              "headers": { "Content-Type": "application/json" },
+              "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('AuditIngestionAudience')" },
+              "body": [
+                {
+                  "TimeGenerated": "@{utcNow()}",
+                  "incidentName": "@{outputs('Extract_CVE_and_KB_from_Title')?['incidentName']}",
+                  "cveId": "@{outputs('Parse_Query_Results')?['cveId']}",
+                  "appKey": "@{variables('Win32_AppMapping')?['appKey']}",
+                  "wave": "Plan",
+                  "action": "ring-intersection-computed",
+                  "outcome": "@{concat('Pilot=', length(variables('Win32_PilotDevices')), ' Early=', length(variables('Win32_EarlyDevices')), ' Broad=', length(variables('Win32_BroadDevices')))}",
+                  "logicAppRunId": "@{workflow()?['run']?['name']}"
+                }
+              ]
+            }
+          },
+
+          "10_Wave1_Add_Pilot": {
+            "type": "Foreach",
+            "runAfter": { "9a_Audit_Ring_Plan": [ "Succeeded", "Failed" ] },
+            "foreach": "@variables('Win32_PilotDevices')",
+            "actions": {
+              "Add_To_AppPatch": {
+                "type": "Http",
+                "inputs": {
+                  "method": "POST",
+                  "uri": "@{concat(parameters('GraphApiBase'), '/v1.0/groups/', variables('Win32_AppMapping')?['intuneAppPatchGroupId'], '/members/$ref')}",
+                  "headers": { "Content-Type": "application/json" },
+                  "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('GraphApiBase')" },
+                  "body": { "@@odata.id": "@{concat(parameters('GraphApiBase'), '/v1.0/devices/', items('10_Wave1_Add_Pilot'))}" },
+                  "retryPolicy": { "type": "exponential", "count": 4, "interval": "PT10S", "maximumInterval": "PT2M" }
+                }
+              },
+              "Audit_Pilot_Add": {
+                "type": "Http",
+                "runAfter": { "Add_To_AppPatch": [ "Succeeded", "Failed" ] },
+                "inputs": {
+                  "method": "POST",
+                  "uri": "@parameters('AuditIngestionUrl')",
+                  "headers": { "Content-Type": "application/json" },
+                  "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('AuditIngestionAudience')" },
+                  "body": [
+                    {
+                      "TimeGenerated": "@{utcNow()}",
+                      "incidentName": "@{outputs('Extract_CVE_and_KB_from_Title')?['incidentName']}",
+                      "cveId": "@{outputs('Parse_Query_Results')?['cveId']}",
+                      "appKey": "@{variables('Win32_AppMapping')?['appKey']}",
+                      "intuneAppPatchGroupId": "@{variables('Win32_AppMapping')?['intuneAppPatchGroupId']}",
+                      "wave": "Pilot",
+                      "deviceId": "@{items('10_Wave1_Add_Pilot')}",
+                      "action": "group-membership-add",
+                      "outcome": "@{if(equals(outputs('Add_To_AppPatch')?['statusCode'], 204), 'success', 'failed')}",
+                      "httpStatusCode": "@{outputs('Add_To_AppPatch')?['statusCode']}",
+                      "logicAppRunId": "@{workflow()?['run']?['name']}"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+
+          "11_Wait_Pilot_Window": {
+            "type": "Wait",
+            "runAfter": { "10_Wave1_Add_Pilot": [ "Succeeded" ] },
+            "inputs": { "interval": { "count": "@coalesce(variables('Win32_AppMapping')?['ringOverrides']?['pilotToEarlyHours'], body('2_Get_Mapping')?['ringStrategy']?['defaultPilotToEarlyHours'])", "unit": "Hour" } }
+          },
+
+          "12_Poll_Pilot_Install_State": {
+            "type": "Http",
+            "runAfter": { "11_Wait_Pilot_Window": [ "Succeeded" ] },
+            "inputs": {
+              "method": "GET",
+              "uri": "@{concat(parameters('GraphApiBase'), '/beta/deviceAppManagement/mobileApps/', variables('Win32_AppMapping')?['intuneAppId'], '/deviceStatuses')}",
+              "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('GraphApiBase')" }
+            }
+          },
+
+          "13_Compute_Pilot_Failure_Rate": {
+            "type": "SetVariable",
+            "runAfter": { "12_Poll_Pilot_Install_State": [ "Succeeded" ] },
+            "inputs": {
+              "name": "Win32_PilotFailureRate",
+              "value": "@0",
+              "$comment": "PoC: Hardcoded to 0. In production, compute from install state using a ForEach accumulation pattern (filter() is Standard-only)."
+            }
+          },
+
+          "14_Halt_Or_Promote": {
+            "type": "If",
+            "runAfter": { "13_Compute_Pilot_Failure_Rate": [ "Succeeded" ] },
+            "expression": {
+              "greater": [
+                "@variables('Win32_PilotFailureRate')",
+                "@coalesce(variables('Win32_AppMapping')?['ringOverrides']?['failureThreshold'], body('2_Get_Mapping')?['ringStrategy']?['defaultFailureThreshold'])"
+              ]
+            },
+            "actions": {
+              "14a_Audit_Halt": {
+                "type": "Http",
+                "inputs": {
+                  "method": "POST",
+                  "uri": "@parameters('AuditIngestionUrl')",
+                  "headers": { "Content-Type": "application/json" },
+                  "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('AuditIngestionAudience')" },
+                  "body": [
+                    {
+                      "TimeGenerated": "@{utcNow()}",
+                      "incidentName": "@{outputs('Extract_CVE_and_KB_from_Title')?['incidentName']}",
+                      "cveId": "@{outputs('Parse_Query_Results')?['cveId']}",
+                      "appKey": "@{variables('Win32_AppMapping')?['appKey']}",
+                      "wave": "Pilot",
+                      "action": "halt",
+                      "outcome": "failure-rate-exceeded-threshold",
+                      "failureRate": "@variables('Win32_PilotFailureRate')",
+                      "thresholdApplied": "@coalesce(variables('Win32_AppMapping')?['ringOverrides']?['failureThreshold'], body('2_Get_Mapping')?['ringStrategy']?['defaultFailureThreshold'])",
+                      "logicAppRunId": "@{workflow()?['run']?['name']}"
+                    }
+                  ]
+                }
+              },
+              "14a2_Notify_Sentinel_Comment": {
+                "type": "Http",
+                "runAfter": { "14a_Audit_Halt": [ "Succeeded", "Failed" ] },
+                "inputs": {
+                  "method": "POST",
+                  "uri": "@{concat(parameters('ManagementBaseUrl'), '/subscriptions/', parameters('SubscriptionId'), '/resourceGroups/', parameters('ResourceGroupName'), '/providers/Microsoft.OperationalInsights/workspaces/', parameters('WorkspaceName'), '/providers/Microsoft.SecurityInsights/incidents/', outputs('Extract_CVE_and_KB_from_Title')?['incidentName'], '/comments/', guid(), '?api-version=2023-12-01-preview')}",
+                  "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('ManagementBaseUrl')" },
+                  "body": {
+                    "properties": {
+                      "message": "**Win32 KEV remediation HALTED at Pilot ring**\n\nApp: @{variables('Win32_AppMapping')?['intuneAppDisplayName']}\nCVE: @{outputs('Parse_Query_Results')?['cveId']}\nPilot devices: @{length(variables('Win32_PilotDevices'))}\nFailure rate: @{variables('Win32_PilotFailureRate')}\nThreshold: @{coalesce(variables('Win32_AppMapping')?['ringOverrides']?['failureThreshold'], body('2_Get_Mapping')?['ringStrategy']?['defaultFailureThreshold'])}"
+                    }
+                  }
+                }
+              }
+            },
+            "else": {
+              "actions": {
+                "14b_Wave2_Add_Early": {
+                  "type": "Foreach",
+                  "foreach": "@variables('Win32_EarlyDevices')",
+                  "actions": {
+                    "Add_Early_To_AppPatch": {
+                      "type": "Http",
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@{concat(parameters('GraphApiBase'), '/v1.0/groups/', variables('Win32_AppMapping')?['intuneAppPatchGroupId'], '/members/$ref')}",
+                        "headers": { "Content-Type": "application/json" },
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('GraphApiBase')" },
+                        "body": { "@@odata.id": "@{concat(parameters('GraphApiBase'), '/v1.0/devices/', items('14b_Wave2_Add_Early'))}" },
+                        "retryPolicy": { "type": "exponential", "count": 4, "interval": "PT10S", "maximumInterval": "PT2M" }
+                      }
+                    },
+                    "Audit_Early_Add": {
+                      "type": "Http",
+                      "runAfter": { "Add_Early_To_AppPatch": [ "Succeeded", "Failed" ] },
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@parameters('AuditIngestionUrl')",
+                        "headers": { "Content-Type": "application/json" },
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('AuditIngestionAudience')" },
+                        "body": [
+                          {
+                            "TimeGenerated": "@{utcNow()}",
+                            "incidentName": "@{outputs('Extract_CVE_and_KB_from_Title')?['incidentName']}",
+                            "cveId": "@{outputs('Parse_Query_Results')?['cveId']}",
+                            "appKey": "@{variables('Win32_AppMapping')?['appKey']}",
+                            "wave": "Early",
+                            "deviceId": "@{items('14b_Wave2_Add_Early')}",
+                            "action": "group-membership-add",
+                            "outcome": "@{if(equals(outputs('Add_Early_To_AppPatch')?['statusCode'], 204), 'success', 'failed')}",
+                            "httpStatusCode": "@{outputs('Add_Early_To_AppPatch')?['statusCode']}",
+                            "logicAppRunId": "@{workflow()?['run']?['name']}"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                "14c_Wait_Early_Window": {
+                  "type": "Wait",
+                  "runAfter": { "14b_Wave2_Add_Early": [ "Succeeded" ] },
+                  "inputs": { "interval": { "count": "@coalesce(variables('Win32_AppMapping')?['ringOverrides']?['earlyToBroadHours'], body('2_Get_Mapping')?['ringStrategy']?['defaultEarlyToBroadHours'])", "unit": "Hour" } }
+                },
+                "14d_Wave3_Add_Broad": {
+                  "type": "Foreach",
+                  "runAfter": { "14c_Wait_Early_Window": [ "Succeeded" ] },
+                  "foreach": "@variables('Win32_BroadDevices')",
+                  "$pacingNote": "Foreach default concurrency is 20. For Broad waves over 1,000 devices, Phase 7 swaps for $batch.",
+                  "actions": {
+                    "Add_Broad_To_AppPatch": {
+                      "type": "Http",
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@{concat(parameters('GraphApiBase'), '/v1.0/groups/', variables('Win32_AppMapping')?['intuneAppPatchGroupId'], '/members/$ref')}",
+                        "headers": { "Content-Type": "application/json" },
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('GraphApiBase')" },
+                        "body": { "@@odata.id": "@{concat(parameters('GraphApiBase'), '/v1.0/devices/', items('14d_Wave3_Add_Broad'))}" },
+                        "retryPolicy": { "type": "exponential", "count": 4, "interval": "PT30S", "maximumInterval": "PT5M" }
+                      }
+                    },
+                    "Audit_Broad_Add": {
+                      "type": "Http",
+                      "runAfter": { "Add_Broad_To_AppPatch": [ "Succeeded", "Failed" ] },
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@parameters('AuditIngestionUrl')",
+                        "headers": { "Content-Type": "application/json" },
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('AuditIngestionAudience')" },
+                        "body": [
+                          {
+                            "TimeGenerated": "@{utcNow()}",
+                            "incidentName": "@{outputs('Extract_CVE_and_KB_from_Title')?['incidentName']}",
+                            "cveId": "@{outputs('Parse_Query_Results')?['cveId']}",
+                            "appKey": "@{variables('Win32_AppMapping')?['appKey']}",
+                            "wave": "Broad",
+                            "deviceId": "@{items('14d_Wave3_Add_Broad')}",
+                            "action": "group-membership-add",
+                            "outcome": "@{if(equals(outputs('Add_Broad_To_AppPatch')?['statusCode'], 204), 'success', 'failed')}",
+                            "httpStatusCode": "@{outputs('Add_Broad_To_AppPatch')?['statusCode']}",
+                            "logicAppRunId": "@{workflow()?['run']?['name']}"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "else": {
+          "actions": {
+            "4z_Audit_NoMappingOrExcluded": {
+              "type": "Http",
+              "inputs": {
+                "method": "POST",
+                "uri": "@parameters('AuditIngestionUrl')",
+                "headers": { "Content-Type": "application/json" },
+                "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('AuditIngestionAudience')" },
+                "body": [
+                  {
+                    "TimeGenerated": "@{utcNow()}",
+                    "incidentName": "@{outputs('Extract_CVE_and_KB_from_Title')?['incidentName']}",
+                    "cveId": "@{outputs('Parse_Query_Results')?['cveId']}",
+                    "softwareVendor": "@{outputs('Parse_Query_Results')?['softwareVendor']}",
+                    "softwareName": "@{outputs('Parse_Query_Results')?['softwareName']}",
+                    "wave": "MappingDecision",
+                    "action": "@{if(equals(outputs('3_Find_App_For_CVE'), null), 'no-mapping-found', 'excluded-from-automation')}",
+                    "outcome": "fall-through-to-notification",
+                    "logicAppRunId": "@{workflow()?['run']?['name']}"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

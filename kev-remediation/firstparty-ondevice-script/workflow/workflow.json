@@ -1,0 +1,80 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "mdeResourceBase": { "type": "String" },
+    "mdeAudience": { "type": "String" },
+    "graphBase": { "type": "String" },
+    "kevFeedUrl": { "type": "String" },
+    "scriptPolicyId": { "type": "String" },
+    "sinceHours": { "type": "Int" }
+  },
+  "triggers": {
+    "Recurrence": {
+      "type": "Recurrence",
+      "recurrence": { "frequency": "Hour", "interval": 6 }
+    }
+  },
+  "actions": {
+    "Get_CISA_KEV": {
+      "type": "Http",
+      "runAfter": {},
+      "inputs": {
+        "method": "GET",
+        "uri": "@parameters('kevFeedUrl')"
+      }
+    },
+    "Get_MDVM_Delta": {
+      "type": "Http",
+      "runAfter": { "Get_CISA_KEV": [ "Succeeded" ] },
+      "inputs": {
+        "method": "GET",
+        "uri": "@{parameters('mdeResourceBase')}/api/machines/SoftwareVulnerabilityChangesByMachine",
+        "queries": {
+          "sinceTime": "@{formatDateTime(addHours(utcNow(), mul(parameters('sinceHours'), -1)), 'yyyy-MM-ddTHH:mm:ssZ')}"
+        },
+        "authentication": {
+          "type": "ManagedServiceIdentity",
+          "audience": "@parameters('mdeAudience')"
+        }
+      }
+    },
+    "Select_KEV_CVEs": {
+      "type": "Select",
+      "runAfter": { "Get_MDVM_Delta": [ "Succeeded" ] },
+      "inputs": {
+        "from": "@coalesce(body('Get_CISA_KEV')?['vulnerabilities'], json('[]'))",
+        "select": "@item()?['cveID']"
+      }
+    },
+    "Filter_KEV_Exposed": {
+      "type": "Query",
+      "runAfter": { "Select_KEV_CVEs": [ "Succeeded" ] },
+      "inputs": {
+        "from": "@coalesce(body('Get_MDVM_Delta')?['value'], json('[]'))",
+        "where": "@and(contains(body('Select_KEV_CVEs'), item()?['CveId']), equals(item()?['Status'], 'New'))"
+      }
+    },
+    "For_each_Exposed": {
+      "type": "Foreach",
+      "runAfter": { "Filter_KEV_Exposed": [ "Succeeded" ] },
+      "foreach": "@body('Filter_KEV_Exposed')",
+      "actions": {
+        "Trigger_Remediation": {
+          "type": "Http",
+          "runAfter": {},
+          "inputs": {
+            "method": "POST",
+            "uri": "@{parameters('graphBase')}/beta/deviceManagement/managedDevices/@{items('For_each_Exposed')?['DeviceId']}/initiateOnDemandProactiveRemediation",
+            "body": { "scriptPolicyId": "@parameters('scriptPolicyId')" },
+            "authentication": {
+              "type": "ManagedServiceIdentity",
+              "audience": "@parameters('graphBase')"
+            }
+          }
+        }
+      }
+    }
+  },
+  "outputs": {}
+}

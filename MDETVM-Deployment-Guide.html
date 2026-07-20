@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MDETVM Solution – Deployment Guide</title>
+  <script>
+    (() => {
+      const param = new URLSearchParams(window.location.search).get("clawpilotTheme");
+      const theme = param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --cp-bg: #f7f4ef;
+      --cp-bg-elevated: #fcfbf8;
+      --cp-surface: #ffffff;
+      --cp-surface-soft: #f5f5f5;
+      --cp-border: #dedede;
+      --cp-border-strong: #919191;
+      --cp-text: #242424;
+      --cp-text-muted: #5c5c5c;
+      --cp-text-soft: #6f6f6f;
+      --cp-accent: #b11f4b;
+      --cp-accent-hover: #9a1a41;
+      --cp-accent-soft: rgba(177, 31, 75, 0.08);
+      --cp-accent-fg: #ffffff;
+      --cp-success: #16a34a;
+      --cp-danger: #dc2626;
+      --cp-warning: #f59e0b;
+      --cp-link: #0078d4;
+      --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.12);
+      --cp-overlay: rgba(255, 255, 255, 0.8);
+      --cp-panel: rgba(255, 255, 255, 0.86);
+      --cp-panel-strong: rgba(255, 255, 255, 0.96);
+      --cp-sheen: rgba(255, 255, 255, 0.55);
+      --cp-highlight: rgba(177, 31, 75, 0.12);
+    }
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --cp-bg: #3d3b3a;
+      --cp-bg-elevated: #343231;
+      --cp-surface: #292929;
+      --cp-surface-soft: #2e2e2e;
+      --cp-border: #474747;
+      --cp-border-strong: #5f5f5f;
+      --cp-text: #dedede;
+      --cp-text-muted: #919191;
+      --cp-text-soft: #b0b0b0;
+      --cp-accent: #fd8ea1;
+      --cp-accent-hover: #fb7b91;
+      --cp-accent-soft: rgba(253, 142, 161, 0.14);
+      --cp-accent-fg: #1a1a1a;
+      --cp-success: #4ade80;
+      --cp-danger: #f87171;
+      --cp-warning: #fbbf24;
+      --cp-link: #4da6ff;
+      --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+      --cp-overlay: rgba(41, 41, 41, 0.88);
+      --cp-panel: rgba(41, 41, 41, 0.72);
+      --cp-panel-strong: rgba(41, 41, 41, 0.96);
+      --cp-sheen: rgba(255, 255, 255, 0.04);
+      --cp-highlight: rgba(253, 142, 161, 0.12);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--cp-bg);
+      color: var(--cp-text);
+      font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      padding: 2rem 1rem 4rem;
+    }
+
+    .page {
+      max-width: 860px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    .header {
+      background: var(--cp-surface);
+      border: 1px solid var(--cp-border);
+      border-radius: 16px;
+      padding: 2rem 2.5rem;
+      margin-bottom: 2rem;
+      box-shadow: 0 0 2px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.14);
+    }
+    .header-eyebrow {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--cp-accent);
+      margin-bottom: 0.5rem;
+    }
+    .header h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: var(--cp-text);
+      margin-bottom: 0.5rem;
+    }
+    .header p {
+      color: var(--cp-text-muted);
+      font-size: 0.95rem;
+    }
+
+    /* Progress tracker */
+    .progress-bar {
+      display: flex;
+      gap: 0.25rem;
+      margin-bottom: 2rem;
+      padding: 1rem 1.5rem;
+      background: var(--cp-surface);
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      box-shadow: 0 0 2px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.14);
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .step-pip {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8rem;
+      color: var(--cp-text-muted);
+      cursor: pointer;
+      padding: 0.25rem 0.5rem;
+      border-radius: 0.375rem;
+      transition: background 0.15s;
+    }
+    .step-pip:hover { background: var(--cp-surface-soft); }
+    .step-pip .pip-num {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--cp-surface-soft);
+      border: 1px solid var(--cp-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: var(--cp-text-muted);
+      flex-shrink: 0;
+    }
+    .step-pip.done .pip-num {
+      background: var(--cp-success);
+      border-color: var(--cp-success);
+      color: #fff;
+    }
+
+    /* Prerequisites */
+    .prereq-card {
+      background: var(--cp-accent-soft);
+      border: 1px solid var(--cp-accent);
+      border-radius: 0.625rem;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .prereq-card h3 {
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--cp-accent);
+      margin-bottom: 0.75rem;
+    }
+    .prereq-card ul {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    .prereq-card ul li {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      font-size: 0.9rem;
+      color: var(--cp-text);
+    }
+    .prereq-card ul li::before {
+      content: "✓";
+      color: var(--cp-success);
+      font-weight: 700;
+      flex-shrink: 0;
+      margin-top: 0.05rem;
+    }
+
+    /* Step cards */
+    .step-card {
+      background: var(--cp-surface);
+      border: 1px solid var(--cp-border);
+      border-radius: 16px;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 0 2px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.14);
+      overflow: hidden;
+    }
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--cp-border);
+      background: var(--cp-surface);
+    }
+    .step-num {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: var(--cp-accent);
+      color: var(--cp-accent-fg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.9rem;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .step-title {
+      flex: 1;
+    }
+    .step-title h2 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--cp-text);
+    }
+    .step-title .step-subtitle {
+      font-size: 0.8rem;
+      color: var(--cp-text-muted);
+      margin-top: 0.1rem;
+    }
+    .step-badge {
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-auto { background: var(--cp-surface-soft); color: var(--cp-text-muted); border: 1px solid var(--cp-border); }
+    .badge-manual { background: var(--cp-accent-soft); color: var(--cp-accent); border: 1px solid var(--cp-accent); }
+    .badge-verify { background: rgba(245, 158, 11, 0.1); color: var(--cp-warning); border: 1px solid var(--cp-warning); }
+
+    .step-body {
+      padding: 1.5rem;
+    }
+    .step-body ol {
+      list-style: none;
+      counter-reset: step-counter;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .step-body ol li {
+      counter-increment: step-counter;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      font-size: 0.92rem;
+      color: var(--cp-text);
+    }
+    .step-body ol li::before {
+      content: counter(step-counter);
+      min-width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--cp-surface-soft);
+      border: 1px solid var(--cp-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: var(--cp-text-muted);
+      flex-shrink: 0;
+      margin-top: 0.15rem;
+    }
+    .step-body ul {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      padding-left: 0.5rem;
+    }
+    .step-body ul li {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      font-size: 0.9rem;
+      color: var(--cp-text);
+    }
+    .step-body ul li::before {
+      content: "→";
+      color: var(--cp-accent);
+      flex-shrink: 0;
+      font-weight: 700;
+    }
+
+    /* Code blocks */
+    .code-block {
+      background: var(--cp-surface-soft);
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      padding: 0.875rem 1rem;
+      margin: 0.75rem 0;
+      font-family: Consolas, "Courier New", Courier, monospace;
+      font-size: 0.82rem;
+      color: var(--cp-text);
+      overflow-x: auto;
+      white-space: pre;
+      line-height: 1.5;
+      position: relative;
+    }
+    .code-block .copy-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      background: var(--cp-surface);
+      border: 1px solid var(--cp-border);
+      border-radius: 0.375rem;
+      padding: 0.2rem 0.5rem;
+      font-size: 0.7rem;
+      color: var(--cp-text-muted);
+      cursor: pointer;
+      font-family: "Segoe UI", Aptos, Calibri, sans-serif;
+      transition: background 0.15s;
+    }
+    .code-block .copy-btn:hover { background: var(--cp-surface-soft); color: var(--cp-text); }
+    .code-block .copy-btn.copied { color: var(--cp-success); border-color: var(--cp-success); }
+
+    /* Inline code */
+    code {
+      font-family: Consolas, "Courier New", Courier, monospace;
+      font-size: 0.85em;
+      background: var(--cp-surface-soft);
+      border: 1px solid var(--cp-border);
+      border-radius: 0.25rem;
+      padding: 0.1em 0.35em;
+      color: var(--cp-text);
+    }
+
+    /* Note/warning callouts */
+    .callout {
+      border-radius: 0.625rem;
+      padding: 0.875rem 1rem;
+      margin: 1rem 0;
+      font-size: 0.88rem;
+      display: flex;
+      gap: 0.75rem;
+      align-items: flex-start;
+    }
+    .callout-icon { flex-shrink: 0; font-size: 1rem; margin-top: 0.05rem; }
+    .callout.note { background: rgba(0, 120, 212, 0.08); border: 1px solid rgba(0, 120, 212, 0.25); color: var(--cp-text); }
+    .callout.warning { background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3); color: var(--cp-text); }
+    .callout.success { background: rgba(22, 163, 74, 0.08); border: 1px solid rgba(22, 163, 74, 0.25); color: var(--cp-text); }
+
+    /* Error table */
+    .error-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      margin-top: 1rem;
+    }
+    .error-table th {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      background: var(--cp-surface-soft);
+      border: 1px solid var(--cp-border);
+      font-weight: 600;
+      color: var(--cp-text-muted);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .error-table td {
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--cp-border);
+      color: var(--cp-text);
+      vertical-align: top;
+    }
+    .error-table tr:hover td { background: var(--cp-surface-soft); }
+    .http-code { font-family: Consolas, "Courier New", monospace; font-weight: 700; }
+    .http-201 { color: var(--cp-success); }
+    .http-400 { color: var(--cp-warning); }
+    .http-403 { color: var(--cp-danger); }
+    .http-404 { color: var(--cp-danger); }
+
+    /* Divider */
+    .section-divider {
+      border: none;
+      border-top: 1px solid var(--cp-border);
+      margin: 0.75rem 0;
+    }
+
+    /* Sub-section label */
+    .sub-label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--cp-text-muted);
+      margin: 1rem 0 0.5rem;
+    }
+
+    /* ID reference card */
+    .id-ref {
+      background: var(--cp-surface-soft);
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      padding: 1rem 1.25rem;
+      margin: 0.75rem 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .id-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 0.85rem;
+    }
+    .id-label {
+      font-weight: 600;
+      color: var(--cp-text-muted);
+      min-width: 140px;
+      flex-shrink: 0;
+    }
+    .id-value {
+      font-family: Consolas, "Courier New", monospace;
+      color: var(--cp-text);
+      font-size: 0.82rem;
+      flex: 1;
+    }
+    .id-tag {
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+      background: var(--cp-accent-soft);
+      color: var(--cp-accent);
+      flex-shrink: 0;
+    }
+    .id-tag.constant { background: rgba(22, 163, 74, 0.1); color: var(--cp-success); }
+    .id-tag.variable { background: var(--cp-accent-soft); color: var(--cp-accent); }
+
+    /* Link */
+    a { color: var(--cp-link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Theme toggle */
+    .theme-toggle {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
+      background: var(--cp-surface);
+      border: 1px solid var(--cp-border);
+      border-radius: 0.625rem;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      color: var(--cp-text-muted);
+      box-shadow: 0 0 2px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.14);
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .theme-toggle:hover { color: var(--cp-text); }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+      body { padding: 1rem 0.75rem 3rem; }
+      .header { padding: 1.5rem; }
+      .step-body { padding: 1.25rem; }
+      .id-label { min-width: 100px; }
+    }
+  </style>
+</head>
+<body>
+
+<button class="theme-toggle" onclick="toggleTheme()">🌓 Toggle theme</button>
+
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-eyebrow">Deployment Guide</div>
+    <h1>MDETVM Solution</h1>
+    <p>End-to-end steps to deploy the Logic App, grant permissions, and populate the KEV workbook in Microsoft Sentinel.</p>
+  </div>
+
+  <!-- Step progress pips -->
+  <div class="progress-bar" id="progressBar">
+    <span style="font-size:0.78rem;font-weight:600;color:var(--cp-text-muted);margin-right:0.25rem;">Steps:</span>
+    <span class="step-pip" onclick="scrollToStep(1)"><span class="pip-num">1</span>Deploy ARM</span>
+    <span class="step-pip" onclick="scrollToStep(2)"><span class="pip-num">2</span>Get MI ID</span>
+    <span class="step-pip" onclick="scrollToStep(3)"><span class="pip-num">3</span>Graph Permission</span>
+    <span class="step-pip" onclick="scrollToStep(4)"><span class="pip-num">4</span>Verify DCR</span>
+    <span class="step-pip" onclick="scrollToStep(5)"><span class="pip-num">5</span>Trigger &amp; Verify</span>
+    <span class="step-pip" onclick="scrollToStep(6)"><span class="pip-num">6</span>Deploy Workbook</span>
+  </div>
+
+  <!-- Prerequisites -->
+  <div class="prereq-card">
+    <h3>Before you start</h3>
+    <ul>
+      <li><strong>Global Administrator</strong> or <strong>Privileged Role Administrator</strong> in the tenant</li>
+      <li><strong>Owner</strong> or <strong>User Access Administrator</strong> on the Azure subscription</li>
+      <li>Microsoft Sentinel already deployed with a Log Analytics workspace</li>
+    </ul>
+  </div>
+
+  <!-- Step 1 -->
+  <div class="step-card" id="step-1">
+    <div class="step-header">
+      <div class="step-num">1</div>
+      <div class="step-title">
+        <h2>Deploy the Logic App</h2>
+        <div class="step-subtitle">Deploy the ARM template via the Azure portal</div>
+      </div>
+      <span class="step-badge badge-manual">Manual</span>
+    </div>
+    <div class="step-body">
+      <ol>
+        <li>In the Azure portal, search for <strong>Deploy a custom template</strong></li>
+        <li>Select <strong>Build your own template in the editor</strong></li>
+        <li>Paste the contents of <code>MDETVM-LogicApp.json</code> → <strong>Save</strong></li>
+        <li>Fill in the parameters:
+          <div class="id-ref" style="margin-top:0.5rem;">
+            <div class="id-row"><span class="id-label">PlaybookName</span><span class="id-value">MDETVM</span></div>
+            <div class="id-row"><span class="id-label">WorkspaceName</span><span class="id-value">&lt;your Log Analytics workspace name&gt;</span></div>
+            <div class="id-row"><span class="id-label">WorkspaceResourceGroup</span><span class="id-value">&lt;resource group containing the workspace&gt;</span></div>
+          </div>
+        </li>
+        <li>Select <strong>Review + create → Create</strong> and wait for the deployment to complete</li>
+      </ol>
+      <div class="callout note" style="margin-top:1rem;">
+        <span class="callout-icon">ℹ️</span>
+        <span>The ARM template automatically creates the system-assigned managed identity, the DCR, and grants <strong>Monitoring Metrics Publisher</strong> on the DCR. No extra portal steps needed for those.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2 -->
+  <div class="step-card" id="step-2">
+    <div class="step-header">
+      <div class="step-num">2</div>
+      <div class="step-title">
+        <h2>Copy the Managed Identity Object ID</h2>
+        <div class="step-subtitle">You'll need this for Step 3</div>
+      </div>
+      <span class="step-badge badge-manual">Manual</span>
+    </div>
+    <div class="step-body">
+      <ol>
+        <li>Portal → <strong>Logic Apps</strong> → open <strong>MDETVM</strong></li>
+        <li>Left nav → <strong>Settings → Identity → System assigned</strong></li>
+        <li>Copy the <strong>Object (principal) ID</strong> — save it, you'll paste it twice in Step 3</li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- Step 3 -->
+  <div class="step-card" id="step-3">
+    <div class="step-header">
+      <div class="step-num">3</div>
+      <div class="step-title">
+        <h2>Grant <code style="font-size:0.9rem;">Vulnerability.Read.All</code> to the MI</h2>
+        <div class="step-subtitle">Requires Graph Explorer — this is the only step that uses Graph</div>
+      </div>
+      <span class="step-badge badge-manual">Graph API</span>
+    </div>
+    <div class="step-body">
+      <ol>
+        <li>Go to <a href="https://developer.microsoft.com/graph/graph-explorer" target="_blank">Graph Explorer</a></li>
+        <li>Sign in with your <strong>Global Admin or Privileged Role Administrator</strong> account — confirm the tenant name in the top right is the correct tenant</li>
+        <li>Click your <strong>profile photo → Modify permissions</strong> → search for <code>AppRoleAssignment.ReadWrite.All</code> → <strong>Consent</strong></li>
+        <li>Set the method to <strong>POST</strong> and the URL to:</li>
+      </ol>
+      <div class="code-block" id="code-url">https://graph.microsoft.com/v1.0/servicePrincipals/<span style="color:var(--cp-accent);">&lt;MI-Object-ID&gt;</span>/appRoleAssignments<button class="copy-btn" onclick="copyCode('code-url')">Copy</button></div>
+
+      <div class="sub-label" style="margin-top:1.25rem;">Request Body</div>
+      <p style="font-size:0.88rem;color:var(--cp-text-muted);margin-bottom:0.5rem;">Click the <strong>Request body</strong> tab in Graph Explorer and paste:</p>
+      <div class="code-block" id="code-body">{
+  "principalId": "<span style="color:var(--cp-accent);">&lt;MI-Object-ID&gt;</span>",
+  "resourceId": "fc780465-2017-40d4-a0c5-307022471b92",
+  "appRoleId":  "41269fc5-d873-4a86-8347-c2e0275ff02d"
+}<button class="copy-btn" onclick="copyCode('code-body')">Copy</button></div>
+
+      <div class="sub-label" style="margin-top:1.25rem;">ID Reference</div>
+      <div class="id-ref">
+        <div class="id-row">
+          <span class="id-label">principalId</span>
+          <span class="id-value">&lt;MI Object ID from Step 2&gt;</span>
+          <span class="id-tag variable">Per deployment</span>
+        </div>
+        <div class="id-row">
+          <span class="id-label">resourceId</span>
+          <span class="id-value">fc780465-2017-40d4-a0c5-307022471b92</span>
+          <span class="id-tag constant">Constant</span>
+        </div>
+        <div class="id-row">
+          <span class="id-label">appRoleId</span>
+          <span class="id-value">41269fc5-d873-4a86-8347-c2e0275ff02d</span>
+          <span class="id-tag constant">Constant</span>
+        </div>
+      </div>
+
+      <div class="sub-label" style="margin-top:1.25rem;">Expected Response Codes</div>
+      <table class="error-table">
+        <thead>
+          <tr><th>Code</th><th>Meaning</th><th>Action</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="http-code http-201">201 Created</span></td><td>Success ✓</td><td>Proceed to Step 4</td></tr>
+          <tr><td><span class="http-code http-201">200 OK</span></td><td>Already assigned</td><td>Proceed to Step 4 — you're good</td></tr>
+          <tr><td><span class="http-code http-403">403 Forbidden</span></td><td>Insufficient permissions</td><td>Confirm signed in as Global Admin and <code>AppRoleAssignment.ReadWrite.All</code> is consented</td></tr>
+          <tr><td><span class="http-code http-404">404 Not Found</span></td><td>Wrong Object ID or wrong tenant</td><td>Verify the MI Object ID from Step 2 and confirm correct tenant sign-in</td></tr>
+          <tr><td><span class="http-code http-400">400 Bad Request</span></td><td>Malformed request body</td><td>Check JSON for typos; confirm all three IDs are present</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Step 4 -->
+  <div class="step-card" id="step-4">
+    <div class="step-header">
+      <div class="step-num">4</div>
+      <div class="step-title">
+        <h2>Verify the DCR Permission</h2>
+        <div class="step-subtitle">Should already be set — quick confirmation only</div>
+      </div>
+      <span class="step-badge badge-verify">Verify</span>
+    </div>
+    <div class="step-body">
+      <ol>
+        <li>Portal → <strong>Data Collection Rules</strong> → open the DCR created in Step 1</li>
+        <li>Left nav → <strong>Access control (IAM) → Role assignments</strong></li>
+        <li>Confirm <strong>Monitoring Metrics Publisher</strong> is assigned to <strong>MDETVM</strong></li>
+      </ol>
+
+      <hr class="section-divider" style="margin-top:1rem;" />
+      <div class="sub-label">If it's missing — add it manually</div>
+      <ul>
+        <li>Add → <strong>Add role assignment → Monitoring Metrics Publisher</strong></li>
+        <li>Members → <strong>Managed identity → Select members → Logic App → MDETVM → Assign</strong></li>
+      </ul>
+      <div class="callout warning" style="margin-top:1rem;">
+        <span class="callout-icon">⏱️</span>
+        <span>If you just added this manually, <strong>wait up to 30 minutes</strong> before running Step 5. A 403 from the ingestion endpoint before then is propagation delay, not a failure.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 5 -->
+  <div class="step-card" id="step-5">
+    <div class="step-header">
+      <div class="step-num">5</div>
+      <div class="step-title">
+        <h2>Trigger the Logic App &amp; Verify Data</h2>
+        <div class="step-subtitle">Confirm data is flowing into Sentinel</div>
+      </div>
+      <span class="step-badge badge-manual">Manual</span>
+    </div>
+    <div class="step-body">
+      <ol>
+        <li>Portal → <strong>Logic Apps → MDETVM → Overview → Run Trigger → Run</strong></li>
+        <li>Watch the run history — should show <strong>Succeeded</strong></li>
+        <li>If it fails, click the run → expand each action to find the step and HTTP response code that errored</li>
+        <li>Wait 5–10 minutes, then go to <strong>Sentinel → Logs</strong> and run:</li>
+      </ol>
+      <div class="code-block" id="code-kql">MDETVM_CL
+| take 10<button class="copy-btn" onclick="copyCode('code-kql')">Copy</button></div>
+      <div class="callout success" style="margin-top:0.75rem;">
+        <span class="callout-icon">✅</span>
+        <span>If rows return, data is flowing and the workbook will populate.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 6 -->
+  <div class="step-card" id="step-6">
+    <div class="step-header">
+      <div class="step-num">6</div>
+      <div class="step-title">
+        <h2>Deploy the Sentinel Workbook</h2>
+        <div class="step-subtitle">Paste the workbook JSON from GitHub</div>
+      </div>
+      <span class="step-badge badge-manual">Manual</span>
+    </div>
+    <div class="step-body">
+      <ol>
+        <li>Portal → <strong>Microsoft Sentinel → Workbooks → Add workbook</strong></li>
+        <li>Click <strong>Edit → code editor icon (&lt;/&gt;)</strong></li>
+        <li>Copy the workbook JSON from GitHub: <a href="https://github.com/cdemo-projects/Sentinel-KEV-Remediation-Framework/blob/main/sentinel-workbooks/MDETVM-KEV-Workbook.json" target="_blank">MDETVM-KEV-Workbook.json ↗</a> and paste it into the editor</li>
+        <li>When prompted for <code>workspaceId</code>, enter the full resource ID of your Log Analytics workspace:</li>
+      </ol>
+      <div class="code-block" id="code-ws">/subscriptions/<span style="color:var(--cp-accent);">&lt;sub-id&gt;</span>/resourceGroups/<span style="color:var(--cp-accent);">&lt;rg&gt;</span>/providers/Microsoft.OperationalInsights/workspaces/<span style="color:var(--cp-accent);">&lt;workspace-name&gt;</span><button class="copy-btn" onclick="copyCode('code-ws')">Copy</button></div>
+      <ol start="5" style="margin-top:0.75rem;">
+        <li><strong>Save</strong> — give it a name and select your region</li>
+      </ol>
+    </div>
+  </div>
+
+</div><!-- end .page -->
+
+<script>
+  function toggleTheme() {
+    const current = document.documentElement.getAttribute("data-theme");
+    document.documentElement.setAttribute("data-theme", current === "dark" ? "light" : "dark");
+  }
+
+  function scrollToStep(n) {
+    const el = document.getElementById("step-" + n);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function copyCode(id) {
+    const el = document.getElementById(id);
+    const btn = el.querySelector(".copy-btn");
+    // Get text content, strip the button text
+    let text = el.innerText || el.textContent;
+    text = text.replace(/Copy$/, "").trim();
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = "Copied!";
+      btn.classList.add("copied");
+      setTimeout(() => {
+        btn.textContent = "Copy";
+        btn.classList.remove("copied");
+      }, 2000);
+    });
+  }
+</script>
+
+</body>
+</html>

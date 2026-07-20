@@ -1,0 +1,212 @@
+// =============================================================================
+// CISA-KEV-AdvancedHunting.kql
+// =============================================================================
+// PURPOSE:
+//   Correlates device vulnerabilities in Microsoft Defender XDR Advanced Hunting
+//   against the live CISA Known Exploited Vulnerabilities (KEV) catalog.
+//   Uses the native DeviceTvmSoftwareVulnerabilities table — no custom table
+//   or Logic App required.
+//
+// TABLES:
+//   DeviceTvmSoftwareVulnerabilities — CVEs detected on devices (native to MDE)
+//   DeviceTvmSoftwareVulnerabilitiesKB — CVE knowledge base metadata
+//
+// USAGE:
+//   Paste into Defender XDR > Hunting > Advanced Hunting
+//   https://security.microsoft.com/v2/advanced-hunting
+//
+// SOURCES:
+//   - CISA KEV catalog: https://www.cisa.gov/known-exploited-vulnerabilities
+//   - DeviceTvmSoftwareVulnerabilities schema:
+//     https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-devicetvmsoftwarevulnerabilities-table
+// =============================================================================
+
+
+// =============================================================================
+// --- QUERY 1: NEW CISA KEV entries affecting your devices -------------------
+// Finds devices with CVEs that were added to the CISA KEV catalog recently.
+// Best for: proactive alerting when a new KEV shows up in your environment.
+// =============================================================================
+
+let NewKEVThreshold = 7d;  // Adjust window: 1d for daily checks, 7d for weekly reviews
+let CISA_KEV = externaldata(
+    cveID: string,
+    vendorProject: string,
+    product: string,
+    vulnerabilityName: string,
+    dateAdded: datetime,
+    shortDescription: string,
+    requiredAction: string,
+    dueDate: datetime,
+    knownRansomwareCampaignUse: string,
+    notes: string
+)
+[@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
+with (format="csv", ignoreFirstRecord=true);
+let NewKEVs = CISA_KEV
+    | where dateAdded >= ago(NewKEVThreshold);
+DeviceTvmSoftwareVulnerabilities
+| join kind=inner (NewKEVs) on $left.CveId == $right.cveID
+| join kind=leftouter (
+    DeviceTvmSoftwareVulnerabilitiesKB
+    | project CveId, CvssScore, IsExploitAvailable, VulnerabilitySeverityLevel
+) on CveId
+| extend DueDateInDays = datetime_diff('day', dueDate, now())
+| extend IsOverdue = dueDate < now()
+| extend IsRansomware = knownRansomwareCampaignUse != "Unknown"
+| project
+    DeviceName,
+    DeviceId,
+    CveId,
+    OSPlatform,
+    OSVersion,
+    SoftwareName,
+    SoftwareVendor,
+    SoftwareVersion,
+    VulnerabilitySeverityLevel,
+    CvssScore,
+    IsExploitAvailable,
+    RecommendedSecurityUpdate,
+    RecommendedSecurityUpdateId,
+    // CISA KEV fields
+    vendorProject,
+    product,
+    vulnerabilityName,
+    shortDescription,
+    requiredAction,
+    dateAdded,
+    dueDate,
+    DueDateInDays,
+    IsOverdue,
+    IsRansomware,
+    knownRansomwareCampaignUse
+| sort by IsRansomware desc, CvssScore desc, DueDateInDays asc
+
+
+// =============================================================================
+// --- QUERY 2: ALL CISA KEVs on your devices (full catalog) ------------------
+// Shows every device+CVE combination that matches the full CISA KEV list.
+// Best for: remediation prioritization, executive dashboards, compliance checks.
+// =============================================================================
+/*
+let CISA_KEV = externaldata(
+    cveID: string,
+    vendorProject: string,
+    product: string,
+    vulnerabilityName: string,
+    dateAdded: datetime,
+    shortDescription: string,
+    requiredAction: string,
+    dueDate: datetime,
+    knownRansomwareCampaignUse: string,
+    notes: string
+)
+[@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
+with (format="csv", ignoreFirstRecord=true);
+DeviceTvmSoftwareVulnerabilities
+| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID
+| join kind=leftouter (
+    DeviceTvmSoftwareVulnerabilitiesKB
+    | project CveId, CvssScore, IsExploitAvailable, VulnerabilitySeverityLevel
+) on CveId
+| extend DueDateInDays = datetime_diff('day', dueDate, now())
+| extend IsOverdue = dueDate < now()
+| extend IsRansomware = knownRansomwareCampaignUse != "Unknown"
+| summarize
+    DeviceCount = dcount(DeviceName),
+    Devices = make_set(DeviceName, 50)
+    by CveId,
+       vulnerabilityName,
+       vendorProject,
+       product,
+       VulnerabilitySeverityLevel,
+       CvssScore,
+       IsExploitAvailable,
+       requiredAction,
+       dateAdded,
+       dueDate,
+       DueDateInDays,
+       IsOverdue,
+       IsRansomware
+| sort by IsRansomware desc, IsOverdue desc, CvssScore desc, DeviceCount desc
+*/
+
+
+// =============================================================================
+// --- QUERY 3: CISA KEV summary — overdue + ransomware risk ------------------
+// Quick executive view: how many KEVs, how many overdue, ransomware exposure.
+// =============================================================================
+/*
+let CISA_KEV = externaldata(
+    cveID: string,
+    vendorProject: string,
+    product: string,
+    vulnerabilityName: string,
+    dateAdded: datetime,
+    shortDescription: string,
+    requiredAction: string,
+    dueDate: datetime,
+    knownRansomwareCampaignUse: string,
+    notes: string
+)
+[@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
+with (format="csv", ignoreFirstRecord=true);
+DeviceTvmSoftwareVulnerabilities
+| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID
+| join kind=leftouter (
+    DeviceTvmSoftwareVulnerabilitiesKB
+    | project CveId, CvssScore, IsExploitAvailable
+) on CveId
+| extend IsOverdue = dueDate < now()
+| extend IsRansomware = knownRansomwareCampaignUse != "Unknown"
+| summarize
+    TotalKEVFindings = count(),
+    UniqueKEVs = dcount(CveId),
+    AffectedDevices = dcount(DeviceName),
+    OverdueFindings = countif(IsOverdue),
+    RansomwareLinkedKEVs = dcountif(CveId, IsRansomware),
+    RansomwareAffectedDevices = dcountif(DeviceName, IsRansomware),
+    AvgCvssScore = round(avg(CvssScore), 1),
+    MaxCvssScore = max(CvssScore),
+    OldestDueDatePast = min(iff(IsOverdue, dueDate, datetime(null))),
+    NextDueDate = min(iff(not(IsOverdue), dueDate, datetime(null)))
+*/
+
+
+// =============================================================================
+// --- QUERY 4: Devices with the most CISA KEV exposure -----------------------
+// Ranks devices by total KEV count — find your highest-risk machines.
+// =============================================================================
+/*
+let CISA_KEV = externaldata(
+    cveID: string,
+    vendorProject: string,
+    product: string,
+    vulnerabilityName: string,
+    dateAdded: datetime,
+    shortDescription: string,
+    requiredAction: string,
+    dueDate: datetime,
+    knownRansomwareCampaignUse: string,
+    notes: string
+)
+[@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
+with (format="csv", ignoreFirstRecord=true);
+DeviceTvmSoftwareVulnerabilities
+| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID
+| join kind=leftouter (
+    DeviceTvmSoftwareVulnerabilitiesKB
+    | project CveId, CvssScore, IsExploitAvailable
+) on CveId
+| extend IsOverdue = dueDate < now()
+| extend IsRansomware = knownRansomwareCampaignUse != "Unknown"
+| summarize
+    KEVCount = dcount(CveId),
+    OverdueCount = dcountif(CveId, IsOverdue),
+    RansomwareCount = dcountif(CveId, IsRansomware),
+    MaxCvss = max(CvssScore),
+    KEVList = make_set(CveId, 20)
+    by DeviceName, DeviceId, OsDistribution, OsVersion
+| sort by KEVCount desc
+| take 50
+*/

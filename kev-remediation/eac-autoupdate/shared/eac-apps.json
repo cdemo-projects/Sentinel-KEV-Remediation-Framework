@@ -1,0 +1,28 @@
+{
+  "_about": "EAC auto-update app registry for the KEV remediation API-direct path. An exposed device whose KEV'd software matches an entry here is AUTO-PATCHED by adding it to that app's KEV-Remediate-<appKey> group (a windowsAutoUpdateCatalogApp assigned Required + auto-update). Software with NO entry here, excludeFromAutomation=true, not in the catalog (e.g., Edge), or on a non-Entra device, falls through to the ServiceNow ticket + email path. Drafting assistance: Claude Opus 4.8 (via GitHub Copilot), grounded in Microsoft Learn (windowsAutoUpdateCatalogApp, mobileAppAssignment groupAssignmentTarget, Defender SoftwareVulnerabilityChangesByMachine).",
+
+  "version": 1,
+  "groupPrefix": "KEV-Remediate-",
+
+  "fallback": {
+    "channels": [ "servicenow", "email" ],
+    "_note": "Invoked when: software not listed here, excludeFromAutomation=true, product absent from the Enterprise App Catalog, or device not Entra-resolvable. ServiceNow ticket is created via KEV-ServiceNow-v1; email via Graph sendMail."
+  },
+
+  "_apps_note": "softwareVendor / softwareName are the LOWERCASE tokens MDVM returns (match what MDETVM/SoftwareVulnerabilityChangesByMachine reports - verify with the Defender vuln export). catalogProduct must match the Enterprise App Catalog productDisplayName (run Onboard-EacAutoUpdateApp.ps1 -DumpCatalog). branchId is filled in by onboarding; the engine resolves the group by name (groupPrefix + appKey).",
+  "apps": [
+    { "appKey": "google-chrome",     "catalogProduct": "Google Chrome for Business", "publisher": "Google",      "softwareVendor": "google",             "softwareName": "chrome",      "branchId": "", "excludeFromAutomation": false },
+    { "appKey": "mozilla-firefox",   "catalogProduct": "Mozilla Firefox",            "publisher": "Mozilla",     "softwareVendor": "mozilla",            "softwareName": "firefox",     "branchId": "", "excludeFromAutomation": false },
+    { "appKey": "7zip",              "catalogProduct": "7-Zip",                      "publisher": "Igor Pavlov", "softwareVendor": "igor_pavlov",        "softwareName": "7-zip",       "branchId": "", "excludeFromAutomation": false },
+    { "appKey": "notepad-plus-plus", "catalogProduct": "Notepad++",                  "publisher": "Notepad++",   "softwareVendor": "notepad-plus-plus",  "softwareName": "notepad__",   "branchId": "", "excludeFromAutomation": false }
+  ],
+
+  "schema": {
+    "apps[].appKey": "string - stable id; also the group suffix (KEV-Remediate-<appKey>)",
+    "apps[].catalogProduct": "string - Enterprise App Catalog productDisplayName to resolve the auto-update branch",
+    "apps[].softwareVendor": "string - lowercase MDVM SoftwareVendor token to match exposure rows",
+    "apps[].softwareName": "string - lowercase MDVM SoftwareName token to match exposure rows",
+    "apps[].branchId": "string - mobileAppCatalogPackageBranchId (filled by onboarding; the windowsAutoUpdateCatalogApp tracks the latest package in this branch)",
+    "apps[].excludeFromAutomation": "bool - true => skip auto-patch, force ServiceNow+email fallback (e.g., change-board-gated apps)"
+  }
+}

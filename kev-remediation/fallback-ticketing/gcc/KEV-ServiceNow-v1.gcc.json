@@ -1,0 +1,120 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "ServiceNowInstanceUrl": {
+      "type": "String",
+      "defaultValue": "https://YOUR-INSTANCE.service-now.com",
+      "metadata": { "description": "ServiceNow instance base URL. For demo, can point to a webhook collector like https://webhook.site/<your-uuid>." }
+    },
+    "ServiceNowTable": {
+      "type": "String",
+      "defaultValue": "incident",
+      "metadata": { "description": "ServiceNow table to POST to. Common values: incident, sn_si_incident (SecOps), sn_vul_vulnerable_item (VR)." }
+    },
+    "ServiceNowUsername": {
+      "type": "String",
+      "defaultValue": "kev-remediate-svc",
+      "metadata": { "description": "ServiceNow service account username for Basic Auth." }
+    },
+    "ServiceNowPasswordKvRef": {
+      "type": "String",
+      "defaultValue": "@{REPLACE_WITH_KEYVAULT_SECRET_REFERENCE}",
+      "metadata": { "description": "Key Vault reference to ServiceNow password. For demo, you can hardcode here, but production should use Key Vault secret reference action." }
+    },
+    "AssignmentGroup": {
+      "type": "String",
+      "defaultValue": "Endpoint Engineering",
+      "metadata": { "description": "ServiceNow assignment group that owns endpoint patching." }
+    },
+    "DefenderTenantUrl": {
+      "type": "String",
+      "defaultValue": "https://security.microsoft.com",
+      "metadata": { "description": "Defender portal base URL (use https://security.microsoft.com for commercial)." }
+    }
+  },
+  "triggers": {
+    "manual": {
+      "type": "Request",
+      "kind": "Http",
+      "inputs": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "cveId":              { "type": "string" },
+            "appName":            { "type": "string" },
+            "appPublisher":       { "type": "string" },
+            "appVersion":         { "type": "string" },
+            "managedDeviceCount": { "type": "integer" },
+            "remediation":        { "type": "string" },
+            "insights":           { "type": "string" },
+            "sentinelIncidentId": { "type": "string" },
+            "affectedDevices":    { "type": "array" }
+          },
+          "required": ["cveId", "appName"]
+        }
+      }
+    }
+  },
+  "actions": {
+    "Compose_Description": {
+      "type": "Compose",
+      "runAfter": {},
+      "inputs": "@{concat(\n  'CISA Known Exploited Vulnerability detected by Microsoft Defender Vulnerability Management.\\n\\n',\n  'CVE: ', triggerBody()?['cveId'], '\\n',\n  'Application: ', triggerBody()?['appName'], ' ', triggerBody()?['appVersion'], ' (', triggerBody()?['appPublisher'], ')\\n',\n  'Affected Devices: ', string(coalesce(triggerBody()?['managedDeviceCount'], 0)), '\\n\\n',\n  '--- Remediation Guidance ---\\n',\n  coalesce(triggerBody()?['remediation'], 'Update to the latest version available via Intune Win32 LOB or Enterprise App Catalog.'), '\\n\\n',\n  '--- MDVM Insights ---\\n',\n  coalesce(triggerBody()?['insights'], 'No additional insights provided.'), '\\n\\n',\n  '--- Source ---\\n',\n  'Sentinel Incident: ', coalesce(triggerBody()?['sentinelIncidentId'], '(manual trigger)'), '\\n',\n  'Defender Portal: ', parameters('DefenderTenantUrl'), '/vulnerability-management/vulnerabilities/', triggerBody()?['cveId'], '\\n',\n  'Created by: KEV-ServiceNow-v1 Logic App (automated KEV remediation pipeline)'\n)}"
+    },
+    "Compose_TicketBody": {
+      "type": "Compose",
+      "runAfter": { "Compose_Description": ["Succeeded"] },
+      "inputs": {
+        "short_description": "@{concat('[KEV] ', triggerBody()?['cveId'], ' in ', triggerBody()?['appName'], ' on ', string(coalesce(triggerBody()?['managedDeviceCount'], 0)), ' devices')}",
+        "description":       "@outputs('Compose_Description')",
+        "category":          "Software",
+        "subcategory":       "Vulnerability",
+        "urgency":           "1",
+        "impact":            "2",
+        "priority":          "1",
+        "assignment_group":  "@parameters('AssignmentGroup')",
+        "caller_id":         "@parameters('ServiceNowUsername')",
+        "u_cve_id":          "@{triggerBody()?['cveId']}",
+        "u_app_name":        "@{triggerBody()?['appName']}",
+        "u_app_version":     "@{triggerBody()?['appVersion']}",
+        "u_affected_count":  "@{coalesce(triggerBody()?['managedDeviceCount'], 0)}",
+        "u_source":          "Microsoft Defender Vulnerability Management",
+        "u_kev_listed":      "true"
+      }
+    },
+    "Create_ServiceNow_Ticket": {
+      "type": "Http",
+      "runAfter": { "Compose_TicketBody": ["Succeeded"] },
+      "inputs": {
+        "method": "POST",
+        "uri":    "@{concat(parameters('ServiceNowInstanceUrl'), '/api/now/table/', parameters('ServiceNowTable'))}",
+        "headers": {
+          "Content-Type": "application/json",
+          "Accept":       "application/json"
+        },
+        "body":   "@outputs('Compose_TicketBody')",
+        "authentication": {
+          "type":     "Basic",
+          "username": "@parameters('ServiceNowUsername')",
+          "password": "@parameters('ServiceNowPasswordKvRef')"
+        }
+      }
+    },
+    "Response": {
+      "type": "Response",
+      "kind": "Http",
+      "runAfter": { "Create_ServiceNow_Ticket": ["Succeeded", "Failed"] },
+      "inputs": {
+        "statusCode": "@outputs('Create_ServiceNow_Ticket')['statusCode']",
+        "body": {
+          "cveId":          "@{triggerBody()?['cveId']}",
+          "httpStatusCode": "@outputs('Create_ServiceNow_Ticket')['statusCode']",
+          "requestSent":    "@outputs('Compose_TicketBody')",
+          "rawResponse":    "@outputs('Create_ServiceNow_Ticket')?['body']"
+        }
+      }
+    }
+  },
+  "outputs": {}
+}

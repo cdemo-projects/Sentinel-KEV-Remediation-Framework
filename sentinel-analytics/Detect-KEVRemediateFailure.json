@@ -1,0 +1,45 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workspace": { "type": "String" },
+        "kevRemediateLogicAppName": {
+            "type": "String",
+            "defaultValue": "KEV-Remediate"
+        }
+    },
+    "resources": [
+        {
+            "id": "[concat(resourceId('Microsoft.OperationalInsights/workspaces/providers', parameters('workspace'), 'Microsoft.SecurityInsights'),'/alertRules/a7b8c9d0-4e5f-4a8b-c2bd-3e4f5a6b7c8d')]",
+            "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/a7b8c9d0-4e5f-4a8b-c2bd-3e4f5a6b7c8d')]",
+            "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+            "kind": "Scheduled",
+            "apiVersion": "2023-12-01-preview",
+            "properties": {
+                "displayName": "KEV Framework - KEV-Remediate Logic App Run Failure",
+                "description": "Alerts when a KEV-Remediate Logic App run fails or is cancelled. A failure means a KEV incident was raised but not remediated - the CVE stays open until manually addressed. Cancelled status from the incident-source validation guard is also surfaced so investigators can see attempted unauthorized triggers.",
+                "severity": "High",
+                "enabled": false,
+                "query": "AzureDiagnostics\n| where TimeGenerated > ago(1h)\n| where ResourceProvider == 'MICROSOFT.LOGIC'\n| where Resource =~ '{{kevRemediateLogicAppName}}'\n| where Category == 'WorkflowRuntime'\n| where status_s in ('Failed', 'Cancelled')\n| project\n    TimeGenerated,\n    Workflow = Resource,\n    Status = status_s,\n    RunId = correlation_clientTrackingId_s,\n    StartTime = startTime_t,\n    EndTime = endTime_t,\n    ErrorCode = code_s,\n    ErrorMessage = error_s\n| extend\n    IsLikelyTamperingAttempt = ErrorCode == 'UnauthorizedTriggerSource'",
+                "queryFrequency": "PT15M",
+                "queryPeriod": "PT1H",
+                "triggerOperator": "GreaterThan",
+                "triggerThreshold": 0,
+                "suppressionDuration": "PT1H",
+                "suppressionEnabled": false,
+                "tactics": [ "Impact" ],
+                "techniques": [ "T1565" ],
+                "incidentConfiguration": {
+                    "createIncident": true,
+                    "groupingConfiguration": {
+                        "enabled": false,
+                        "reopenClosedIncident": false,
+                        "lookbackDuration": "PT24H",
+                        "matchingMethod": "AllEntities"
+                    }
+                },
+                "eventGroupingSettings": { "aggregationKind": "AlertPerResult" }
+            }
+        }
+    ]
+}

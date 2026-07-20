@@ -1,0 +1,82 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {},
+  "triggers": {
+    "manual": {
+      "type": "Request",
+      "kind": "Http",
+      "inputs": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "cveId":         { "type": "string" },
+            "appName":       { "type": "string" },
+            "appPublisher":  { "type": "string" },
+            "appVersion":    { "type": "string" },
+            "managedDeviceCount": { "type": "integer" },
+            "remediation":   { "type": "string" },
+            "insights":      { "type": "string" }
+          },
+          "required": ["cveId", "appName", "appPublisher", "appVersion"]
+        }
+      }
+    }
+  },
+  "actions": {
+    "Compose_TaskBody": {
+      "type": "Compose",
+      "runAfter": {},
+      "inputs": {
+        "@@odata.type": "#microsoft.graph.appVulnerabilityTask",
+        "displayName":  "@{concat('Update ', triggerBody()?['appName'], ' to remediate ', triggerBody()?['cveId'])}",
+        "description":  "@{concat('CISA KEV-listed vulnerability ', triggerBody()?['cveId'], ' detected in ', triggerBody()?['appName'], '. Auto-created by KEV-IntuneTask-v1 Logic App.')}",
+        "dueDateTime":  "@{addDays(utcNow(), 14)}",
+        "category":     "advancedThreatProtection",
+        "priority":     "high",
+        "creator":      "kev-intunetask-v1@logicapp",
+        "creatorNotes": "@{coalesce(triggerBody()?['insights'], 'Created by automated KEV remediation Logic App from Sentinel incident.')}",
+        "status":       "pending",
+        "appName":      "@{triggerBody()?['appName']}",
+        "appPublisher": "@{triggerBody()?['appPublisher']}",
+        "appVersion":   "@{triggerBody()?['appVersion']}",
+        "mitigationType":      "update",
+        "insights":            "@{coalesce(triggerBody()?['insights'], 'Update to the latest version available in the Enterprise App Catalog or via Win32 LOB upload to mitigate this CVE.')}",
+        "managedDeviceCount":  "@{coalesce(triggerBody()?['managedDeviceCount'], 0)}",
+        "mobileAppCount":      0,
+        "remediation":         "@{coalesce(triggerBody()?['remediation'], concat('Update ', triggerBody()?['appName'], ' on all affected devices to a non-vulnerable version. Use Intune Win32 LOB or Enterprise App Catalog deployment.'))}"
+      }
+    },
+    "Create_Intune_Security_Task": {
+      "type": "Http",
+      "runAfter": { "Compose_TaskBody": ["Succeeded"] },
+      "inputs": {
+        "method": "POST",
+        "uri":    "https://graph.microsoft.us/beta/deviceAppManagement/deviceAppManagementTasks",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body":   "@outputs('Compose_TaskBody')",
+        "authentication": {
+          "type":     "ManagedServiceIdentity",
+          "audience": "https://graph.microsoft.us"
+        }
+      }
+    },
+    "Response": {
+      "type": "Response",
+      "kind": "Http",
+      "runAfter": { "Create_Intune_Security_Task": ["Succeeded", "Failed"] },
+      "inputs": {
+        "statusCode": "@outputs('Create_Intune_Security_Task')['statusCode']",
+        "body": {
+          "cveId":     "@{triggerBody()?['cveId']}",
+          "taskId":    "@{coalesce(body('Create_Intune_Security_Task')?['id'], '')}",
+          "status":    "@{coalesce(body('Create_Intune_Security_Task')?['status'], '')}",
+          "graphResponse": "@body('Create_Intune_Security_Task')"
+        }
+      }
+    }
+  },
+  "outputs": {}
+}

@@ -1,0 +1,71 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "title": "KEV-Remediate Automation Rule — Wire Sentinel incident to remediation playbook",
+    "description": "Creates a Sentinel automation rule that triggers the KEV-Remediate Logic App whenever the CISA KEV analytics rule creates a new incident. Deploy AFTER the analytics rule and Logic App are in place."
+  },
+  "parameters": {
+    "WorkspaceName": {
+      "type": "string",
+      "metadata": { "description": "Name of the Log Analytics workspace with Sentinel enabled." }
+    },
+    "PlaybookResourceId": {
+      "type": "string",
+      "metadata": { "description": "Full resource ID of the KEV-Remediate Logic App. Format: /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Logic/workflows/KEV-Remediate" }
+    },
+    "AnalyticsRuleId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Optional: Resource ID of the CISA KEV analytics rule. If empty, the automation rule triggers on all incidents with 'CISA KEV' in the title." }
+    }
+  },
+  "variables": {
+    "automationRuleName": "[guid(resourceGroup().id, 'KEV-Remediate-AutomationRule')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/automationRules",
+      "apiVersion": "2023-12-01-preview",
+      "name": "[concat(parameters('WorkspaceName'), '/Microsoft.SecurityInsights/', variables('automationRuleName'))]",
+      "properties": {
+        "displayName": "KEV-Remediate: Auto-trigger remediation on KEV incident",
+        "description": "When a CISA KEV analytics rule creates a new incident, automatically run the KEV-Remediate playbook to push an expedited WUfB deployment (for Windows KBs) or create an MDE remediation task (for third-party CVEs).",
+        "order": 1,
+        "triggeringLogic": {
+          "isEnabled": true,
+          "triggersOn": "Incidents",
+          "triggersWhen": "Created",
+          "conditions": [
+            {
+              "conditionType": "Property",
+              "conditionProperties": {
+                "propertyName": "IncidentTitle",
+                "operator": "Contains",
+                "propertyValues": [ "CISA KEV" ]
+              }
+            }
+          ]
+        },
+        "actions": [
+          {
+            "order": 1,
+            "actionType": "RunPlaybook",
+            "actionConfiguration": {
+              "logicAppResourceId": "[parameters('PlaybookResourceId')]",
+              "tenantId": "[subscription().tenantId]"
+            }
+          },
+          {
+            "order": 2,
+            "actionType": "ModifyProperties",
+            "actionConfiguration": {
+              "status": "Active",
+              "severity": "High"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

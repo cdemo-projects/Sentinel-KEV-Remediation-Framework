@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "_comment": "TRUE GCC = M365 GCC paired with COMMERCIAL Entra/Azure. Endpoints are the SAME worldwide URLs as commercial (graph.microsoft.com / api.security.microsoft.com). Deploy this into the customer's GCC-paired commercial Azure subscription. If the customer is ever GCC High/DoD instead, switch graphBase to https://graph.microsoft.us, mdeResourceBase/mdeAudience to the .us Defender endpoints, and deploy in Azure Government (az cloud set --name AzureUSGovernment).",
+  "parameters": {
+    "logicAppName": { "value": "la-kev-patch-poc-gcc" },
+    "mdeResourceBase": { "value": "https://api.security.microsoft.com" },
+    "mdeAudience": { "value": "https://api.securitycenter.microsoft.com" },
+    "graphBase": { "value": "https://graph.microsoft.com" },
+    "kevFeedUrl": { "value": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json" },
+    "scriptPolicyId": { "value": "REPLACE-WITH-REMEDIATION-SCRIPT-POLICY-ID" },
+    "sinceHours": { "value": 6 }
+  }
+}

@@ -1,0 +1,148 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "title": "AutoClose-KEVIncidents - Daily auto-close of resolved KEV incidents",
+    "description": "Logic App that runs daily, enumerates Active Sentinel incidents created by the 'CISA KEV Detected on Device - MDVM Correlation' analytics rule, re-queries MDETVM_CL for each CVE+device pair, and automatically closes any incident whose underlying CVE is no longer present. Closes with Classification='BenignPositive-SuspiciousButExpected' + comment 'Auto-closed: CVE no longer present on device (remediated).'",
+    "prerequisites": "After deployment, grant the Logic App's managed identity the 'Microsoft Sentinel Responder' role scoped to the workspace, and 'Log Analytics Reader' on the subscription.",
+    "postDeployment": [
+      "Assign 'Microsoft Sentinel Responder' on the workspace to the Logic App MI",
+      "Assign 'Log Analytics Reader' on the workspace to the Logic App MI",
+      "Trigger manually once to confirm flow runs clean"
+    ],
+    "support": { "tier": "community" },
+    "author": { "name": "<author>" }
+  },
+  "parameters": {
+    "PlaybookName": {
+      "defaultValue": "AutoClose-KEVIncidents",
+      "type": "string"
+    },
+    "WorkspaceName": {
+      "type": "string",
+      "metadata": { "description": "Name of the Log Analytics workspace with Sentinel enabled (same RG)." }
+    },
+    "WorkspaceResourceGroup": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().name]"
+    }
+  },
+  "variables": {
+    "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('WorkspaceName'))]",
+    "subscriptionId": "[subscription().subscriptionId]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('PlaybookName')]",
+      "location": "[resourceGroup().location]",
+      "identity": { "type": "SystemAssigned" },
+      "properties": {
+        "state": "Disabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "WorkspaceResourceId": { "type": "String", "defaultValue": "[variables('workspaceResourceId')]" },
+            "WorkspaceName": { "type": "String", "defaultValue": "[parameters('WorkspaceName')]" },
+            "SubscriptionId": { "type": "String", "defaultValue": "[variables('subscriptionId')]" },
+            "ResourceGroupName": { "type": "String", "defaultValue": "[parameters('WorkspaceResourceGroup')]" }
+          },
+          "triggers": {
+            "DailySchedule": {
+              "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "schedule": { "hours": [ "3" ], "minutes": [ 15 ] },
+                "timeZone": "UTC"
+              },
+              "type": "Recurrence"
+            }
+          },
+          "actions": {
+            "Query_OpenKEVIncidents": {
+              "type": "Http",
+              "inputs": {
+                "method": "POST",
+                "uri": "[concat('https://api.loganalytics.us/v1/workspaces/', reference(variables('workspaceResourceId'), '2022-10-01').customerId, '/query')]",
+                "headers": { "Content-Type": "application/json" },
+                "body": {
+                  "query": "SecurityIncident\n| where TimeGenerated > ago(30d)\n| summarize arg_max(TimeGenerated, *) by IncidentNumber\n| where Status != 'Closed'\n| where Title has 'CISA KEV Detected on'\n| extend parts = split(Title, ' ')\n| extend CveId = tostring(parts[0])\n| extend DeviceName = tostring(parts[-1])\n| project IncidentNumber, IncidentName=tostring(Name), Title, CveId, DeviceName"
+                },
+                "authentication": { "type": "ManagedServiceIdentity", "audience": "https://api.loganalytics.us" }
+              },
+              "runAfter": {}
+            },
+            "Query_CurrentVulns": {
+              "type": "Http",
+              "inputs": {
+                "method": "POST",
+                "uri": "[concat('https://api.loganalytics.us/v1/workspaces/', reference(variables('workspaceResourceId'), '2022-10-01').customerId, '/query')]",
+                "headers": { "Content-Type": "application/json" },
+                "body": {
+                  "query": "MDETVM_CL\n| where TimeGenerated > ago(2d)\n| summarize arg_max(TimeGenerated, *) by cveId, deviceName\n| extend Key = strcat(cveId, '|', deviceName)\n| distinct Key"
+                },
+                "authentication": { "type": "ManagedServiceIdentity", "audience": "https://api.loganalytics.us" }
+              },
+              "runAfter": { "Query_OpenKEVIncidents": [ "Succeeded" ] }
+            },
+            "Build_CurrentVulnSet": {
+              "type": "Compose",
+              "inputs": "@body('Query_CurrentVulns')?['tables'][0]?['rows']",
+              "runAfter": { "Query_CurrentVulns": [ "Succeeded" ] }
+            },
+            "ForEach_Incident": {
+              "type": "Foreach",
+              "foreach": "@body('Query_OpenKEVIncidents')?['tables'][0]?['rows']",
+              "actions": {
+                "Set_Lookup_Key": {
+                  "type": "Compose",
+                  "inputs": "@{concat(item()[3], '|', item()[4])}"
+                },
+                "Check_StillVulnerable": {
+                  "type": "If",
+                  "expression": {
+                    "and": [
+                      {
+                        "equals": [
+                          "@contains(outputs('Build_CurrentVulnSet'), createArray(outputs('Set_Lookup_Key')))",
+                          false
+                        ]
+                      }
+                    ]
+                  },
+                  "actions": {
+                    "Close_Incident": {
+                      "type": "Http",
+                      "inputs": {
+                        "method": "PATCH",
+                        "uri": "[concat('https://management.usgovcloudapi.net/subscriptions/', variables('subscriptionId'), '/resourceGroups/', parameters('WorkspaceResourceGroup'), '/providers/Microsoft.OperationalInsights/workspaces/', parameters('WorkspaceName'), '/providers/Microsoft.SecurityInsights/incidents/@{item()[1]}?api-version=2023-12-01-preview')]",
+                        "headers": { "Content-Type": "application/json" },
+                        "body": {
+                          "properties": {
+                            "status": "Closed",
+                            "classification": "BenignPositive",
+                            "classificationReason": "SuspiciousButExpected",
+                            "classificationComment": "@{concat('Auto-closed by AutoClose-KEVIncidents: CVE ', item()[3], ' no longer detected on device ', item()[4], ' in MDETVM_CL within last 48h. Likely remediated via MDVM patch or exception.')}",
+                            "title": "@{item()[2]}",
+                            "severity": "High"
+                          }
+                        },
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "https://management.usgovcloudapi.net" }
+                      }
+                    }
+                  },
+                  "runAfter": { "Set_Lookup_Key": [ "Succeeded" ] }
+                }
+              },
+              "runAfter": { "Build_CurrentVulnSet": [ "Succeeded" ] },
+              "runtimeConfiguration": { "concurrency": { "repetitions": 5 } }
+            }
+          },
+          "outputs": {}
+        }
+      }
+    }
+  ]
+}

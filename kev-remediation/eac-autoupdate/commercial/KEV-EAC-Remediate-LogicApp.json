@@ -1,0 +1,273 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "title": "KEV-EAC-Remediate (Commercial) - API-direct KEV remediation via EAC auto-update",
+    "description": "SCHEDULED (no Sentinel). Correlates CISA KEV against Defender MDVM exposure, then per exposed device: if the software maps to an EAC auto-update app it adds the device to that app's KEV-Remediate-<appKey> group (IME installs the latest catalog version); otherwise it creates a ServiceNow ticket + sends email. Drafting assistance: Claude Opus 4.8 (via GitHub Copilot), grounded in Microsoft Learn (Defender SoftwareVulnerabilityChangesByMachine + machine.aadDeviceId, CISA KEV schema, Graph device $filter + groups members/$ref + users sendMail).",
+    "prerequisites": [
+      "Grant the Logic App MI (Assign-KEVEacPermissions.ps1): Vulnerability.Read.All, Machine.Read.All (WindowsDefenderATP); Device.Read.All, GroupMember.ReadWrite.All, Mail.Send (Graph)",
+      "Pre-stage EAC apps + groups: Onboard-EacAutoUpdateApp.ps1",
+      "Deploy the ServiceNow ticket Logic App (KEV-ServiceNow-v1) and pass its trigger URL as ServiceNowLogicAppUrl"
+    ],
+    "author": { "name": "cdemo-projects" }
+  },
+  "parameters": {
+    "PlaybookName": { "type": "string", "defaultValue": "KEV-EAC-Remediate" },
+    "MdeApiBase": {
+      "type": "string",
+      "defaultValue": "https://api.securitycenter.microsoft.com",
+      "allowedValues": [ "https://api.securitycenter.microsoft.com", "https://api-gcc.securitycenter.microsoft.us", "https://api-gov.securitycenter.microsoft.us" ],
+      "metadata": { "description": "Defender for Endpoint API base (token audience). Commercial default." }
+    },
+    "GraphApiBase": {
+      "type": "string",
+      "defaultValue": "https://graph.microsoft.com",
+      "allowedValues": [ "https://graph.microsoft.com", "https://graph.microsoft.us" ],
+      "metadata": { "description": "Microsoft Graph base. GCC uses commercial Graph (graph.microsoft.com)." }
+    },
+    "KevFeedUrl": { "type": "string", "defaultValue": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json" },
+    "SinceHours": { "type": "int", "defaultValue": 6, "metadata": { "description": "MDVM delta look-back window; match the recurrence." } },
+    "GroupPrefix": { "type": "string", "defaultValue": "KEV-Remediate-" },
+    "EacApps": {
+      "type": "array",
+      "defaultValue": [
+        { "appKey": "google-chrome", "softwareVendor": "google", "softwareName": "chrome", "excludeFromAutomation": false },
+        { "appKey": "mozilla-firefox", "softwareVendor": "mozilla", "softwareName": "firefox", "excludeFromAutomation": false },
+        { "appKey": "7zip", "softwareVendor": "igor_pavlov", "softwareName": "7-zip", "excludeFromAutomation": false },
+        { "appKey": "notepad-plus-plus", "softwareVendor": "notepad-plus-plus", "softwareName": "notepad__", "excludeFromAutomation": false }
+      ],
+      "metadata": { "description": "Lean mirror of eac-apps.json (runtime needs only appKey + match tokens + exclude flag). Can be sourced from mapping-host storage instead." }
+    },
+    "ServiceNowLogicAppUrl": { "type": "securestring", "defaultValue": "", "metadata": { "description": "HTTP trigger URL of the KEV-ServiceNow-v1 Logic App (callable; carries its own SAS)." } },
+    "NotificationSender": { "type": "string", "defaultValue": "", "metadata": { "description": "UPN the MI sends fallback mail as (Mail.Send)." } },
+    "NotificationEmail": { "type": "string", "defaultValue": "", "metadata": { "description": "Recipient for fallback notifications." } }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('PlaybookName')]",
+      "location": "[resourceGroup().location]",
+      "identity": { "type": "SystemAssigned" },
+      "properties": {
+        "state": "Disabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "MdeApiBase": { "type": "String" },
+            "GraphApiBase": { "type": "String" },
+            "KevFeedUrl": { "type": "String" },
+            "SinceHours": { "type": "Int" },
+            "GroupPrefix": { "type": "String" },
+            "EacApps": { "type": "Array" },
+            "ServiceNowLogicAppUrl": { "type": "SecureString" },
+            "NotificationSender": { "type": "String" },
+            "NotificationEmail": { "type": "String" }
+          },
+          "triggers": {
+            "Recurrence": { "type": "Recurrence", "recurrence": { "frequency": "Hour", "interval": 6 } }
+          },
+          "actions": {
+            "Get_CISA_KEV": {
+              "type": "Http", "runAfter": {},
+              "inputs": { "method": "GET", "uri": "@parameters('KevFeedUrl')" }
+            },
+            "Get_MDVM_Delta": {
+              "type": "Http", "runAfter": { "Get_CISA_KEV": [ "Succeeded" ] },
+              "inputs": {
+                "method": "GET",
+                "uri": "@{parameters('MdeApiBase')}/api/machines/SoftwareVulnerabilityChangesByMachine",
+                "queries": { "sinceTime": "@{formatDateTime(addHours(utcNow(), mul(parameters('SinceHours'), -1)), 'yyyy-MM-ddTHH:mm:ssZ')}" },
+                "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('MdeApiBase')" }
+              }
+            },
+            "Select_KEV_CVEs": {
+              "type": "Select", "runAfter": { "Get_MDVM_Delta": [ "Succeeded" ] },
+              "inputs": { "from": "@coalesce(body('Get_CISA_KEV')?['vulnerabilities'], json('[]'))", "select": "@item()?['cveID']" }
+            },
+            "Filter_KEV_Exposed": {
+              "type": "Query", "runAfter": { "Select_KEV_CVEs": [ "Succeeded" ] },
+              "inputs": {
+                "from": "@coalesce(body('Get_MDVM_Delta')?['value'], json('[]'))",
+                "where": "@and(contains(body('Select_KEV_CVEs'), item()?['CveId']), equals(item()?['Status'], 'New'))"
+              }
+            },
+            "For_each_Exposed": {
+              "type": "Foreach", "runAfter": { "Filter_KEV_Exposed": [ "Succeeded" ] },
+              "foreach": "@body('Filter_KEV_Exposed')",
+              "actions": {
+                "Find_KEV_Entry": {
+                  "type": "Query", "runAfter": {},
+                  "inputs": {
+                    "from": "@coalesce(body('Get_CISA_KEV')?['vulnerabilities'], json('[]'))",
+                    "where": "@equals(item()?['cveID'], items('For_each_Exposed')?['CveId'])"
+                  }
+                },
+                "KEV_DueDate": {
+                  "type": "Compose", "runAfter": { "Find_KEV_Entry": [ "Succeeded" ] },
+                  "inputs": "@coalesce(first(body('Find_KEV_Entry'))?['dueDate'], '')"
+                },
+                "Priority": {
+                  "type": "Compose", "runAfter": { "KEV_DueDate": [ "Succeeded" ] },
+                  "inputs": {
+                    "score": "@add(add(if(equals(toLower(coalesce(first(body('Find_KEV_Entry'))?['knownRansomwareCampaignUse'],'')),'known'),50,0),if(contains(toLower(coalesce(items('For_each_Exposed')?['ExploitabilityLevel'],'')),'inkit'),25,if(contains(toLower(coalesce(items('For_each_Exposed')?['ExploitabilityLevel'],'')),'verified'),15,if(contains(toLower(coalesce(items('For_each_Exposed')?['ExploitabilityLevel'],'')),'public'),8,0)))),add(mul(float(coalesce(items('For_each_Exposed')?['CvssScore'],'0')),2),if(equals(outputs('KEV_DueDate'),''),0,if(less(ticks(outputs('KEV_DueDate')),ticks(utcNow())),1000,if(lessOrEquals(ticks(outputs('KEV_DueDate')),ticks(addDays(utcNow(),7))),100,0)))))",
+                    "expedite": "@if(equals(outputs('KEV_DueDate'),''),false,lessOrEquals(ticks(outputs('KEV_DueDate')),ticks(addDays(utcNow(),7))))",
+                    "ransomware": "@equals(toLower(coalesce(first(body('Find_KEV_Entry'))?['knownRansomwareCampaignUse'],'')),'known')",
+                    "exploitability": "@coalesce(items('For_each_Exposed')?['ExploitabilityLevel'],'')",
+                    "cvss": "@coalesce(items('For_each_Exposed')?['CvssScore'],'')",
+                    "dueDate": "@outputs('KEV_DueDate')"
+                  }
+                },
+                "Priority_Text": {
+                  "type": "Compose", "runAfter": { "Priority": [ "Succeeded" ] },
+                  "inputs": "@concat('Priority score ', string(outputs('Priority')?['score']), if(outputs('Priority')?['expedite'],' | EXPEDITE',''), ' | CISA due ', if(equals(outputs('KEV_DueDate'),''),'n/a',outputs('KEV_DueDate')), ' | Ransomware ', if(outputs('Priority')?['ransomware'],'Known','No'), ' | Exploit ', outputs('Priority')?['exploitability'], ' | CVSS ', string(outputs('Priority')?['cvss']))"
+                },
+                "Match_App": {
+                  "type": "Query", "runAfter": { "Priority_Text": [ "Succeeded" ] },
+                  "inputs": {
+                    "from": "@parameters('EacApps')",
+                    "where": "@and(equals(toLower(item()?['softwareVendor']), toLower(items('For_each_Exposed')?['SoftwareVendor'])), equals(toLower(item()?['softwareName']), toLower(items('For_each_Exposed')?['SoftwareName'])))"
+                  }
+                },
+                "Condition_AutoPatchable": {
+                  "type": "If", "runAfter": { "Match_App": [ "Succeeded" ] },
+                  "expression": { "and": [
+                    { "greater": [ "@length(body('Match_App'))", 0 ] },
+                    { "equals": [ "@coalesce(first(body('Match_App'))?['excludeFromAutomation'], false)", false ] }
+                  ] },
+                  "actions": {
+                    "Get_Machine": {
+                      "type": "Http", "runAfter": {},
+                      "inputs": {
+                        "method": "GET",
+                        "uri": "@{parameters('MdeApiBase')}/api/machines/@{items('For_each_Exposed')?['DeviceId']}",
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('MdeApiBase')" }
+                      }
+                    },
+                    "Get_Entra_Device": {
+                      "type": "Http", "runAfter": { "Get_Machine": [ "Succeeded" ] },
+                      "inputs": {
+                        "method": "GET",
+                        "uri": "@{parameters('GraphApiBase')}/v1.0/devices?$filter=deviceId eq '@{body('Get_Machine')?['aadDeviceId']}'",
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('GraphApiBase')" }
+                      }
+                    },
+                    "Condition_HasEntra": {
+                      "type": "If", "runAfter": { "Get_Entra_Device": [ "Succeeded" ] },
+                      "expression": { "and": [ { "greater": [ "@length(coalesce(body('Get_Entra_Device')?['value'], json('[]')))", 0 ] } ] },
+                      "actions": {
+                        "Get_Group": {
+                          "type": "Http", "runAfter": {},
+                          "inputs": {
+                            "method": "GET",
+                            "uri": "@{parameters('GraphApiBase')}/v1.0/groups?$filter=displayName eq '@{parameters('GroupPrefix')}@{first(body('Match_App'))?['appKey']}'",
+                            "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('GraphApiBase')" }
+                          }
+                        },
+                        "Add_To_Group": {
+                          "type": "Http", "runAfter": { "Get_Group": [ "Succeeded" ] },
+                          "inputs": {
+                            "method": "POST",
+                            "uri": "@{parameters('GraphApiBase')}/v1.0/groups/@{first(body('Get_Group')?['value'])?['id']}/members/$ref",
+                            "headers": { "Content-Type": "application/json" },
+                            "body": { "@@odata.id": "@{parameters('GraphApiBase')}/v1.0/directoryObjects/@{first(body('Get_Entra_Device')?['value'])?['id']}" },
+                            "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('GraphApiBase')" }
+                          }
+                        }
+                      },
+                      "else": { "actions": {
+                        "SN_NonEntra": {
+                          "type": "Http", "runAfter": {},
+                          "inputs": {
+                            "method": "POST", "uri": "@parameters('ServiceNowLogicAppUrl')",
+                            "headers": { "Content-Type": "application/json" },
+                            "body": {
+                              "cveId": "@{items('For_each_Exposed')?['CveId']}",
+                              "appName": "@{items('For_each_Exposed')?['SoftwareName']}",
+                              "appPublisher": "@{items('For_each_Exposed')?['SoftwareVendor']}",
+                              "appVersion": "@{items('For_each_Exposed')?['SoftwareVersion']}",
+                              "managedDeviceCount": 1,
+                              "remediation": "EAC auto-update mapped but device is not Entra-resolvable (no aadDeviceId). Patch manually.",
+                              "insights": "@outputs('Priority_Text')",
+                              "affectedDevices": [ "@{items('For_each_Exposed')?['DeviceName']}" ]
+                            }
+                          }
+                        },
+                        "Email_NonEntra": {
+                          "type": "Http", "runAfter": {},
+                          "inputs": {
+                            "method": "POST",
+                            "uri": "@{parameters('GraphApiBase')}/v1.0/users/@{parameters('NotificationSender')}/sendMail",
+                            "headers": { "Content-Type": "application/json" },
+                            "body": { "saveToSentItems": false, "message": {
+                              "subject": "@{if(outputs('Priority')?['expedite'],'[EXPEDITE] ','')}[KEV] @{items('For_each_Exposed')?['CveId']} - manual update (non-Entra device): @{items('For_each_Exposed')?['SoftwareName']}",
+                              "body": { "contentType": "Text", "content": "Device @{items('For_each_Exposed')?['DeviceName']} is exposed to @{items('For_each_Exposed')?['CveId']} in @{items('For_each_Exposed')?['SoftwareName']} but is not Entra-resolvable, so it can't be group-targeted for EAC auto-update. Patch manually." },
+                              "toRecipients": [ { "emailAddress": { "address": "@{parameters('NotificationEmail')}" } } ]
+                            } },
+                            "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('GraphApiBase')" }
+                          }
+                        }
+                      } }
+                    }
+                  },
+                  "else": { "actions": {
+                    "SN_NotAutomatable": {
+                      "type": "Http", "runAfter": {},
+                      "inputs": {
+                        "method": "POST", "uri": "@parameters('ServiceNowLogicAppUrl')",
+                        "headers": { "Content-Type": "application/json" },
+                        "body": {
+                          "cveId": "@{items('For_each_Exposed')?['CveId']}",
+                          "appName": "@{items('For_each_Exposed')?['SoftwareName']}",
+                          "appPublisher": "@{items('For_each_Exposed')?['SoftwareVendor']}",
+                          "appVersion": "@{items('For_each_Exposed')?['SoftwareVersion']}",
+                          "managedDeviceCount": 1,
+                          "remediation": "No EAC auto-update mapping (or excluded from automation). Patch via Win32/MECM or admin action.",
+                          "insights": "@outputs('Priority_Text')",
+                          "affectedDevices": [ "@{items('For_each_Exposed')?['DeviceName']}" ]
+                        }
+                      }
+                    },
+                    "Email_NotAutomatable": {
+                      "type": "Http", "runAfter": {},
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@{parameters('GraphApiBase')}/v1.0/users/@{parameters('NotificationSender')}/sendMail",
+                        "headers": { "Content-Type": "application/json" },
+                        "body": { "saveToSentItems": false, "message": {
+                          "subject": "@{if(outputs('Priority')?['expedite'],'[EXPEDITE] ','')}[KEV] @{items('For_each_Exposed')?['CveId']} - manual update needed: @{items('For_each_Exposed')?['SoftwareName']}",
+                          "body": { "contentType": "Text", "content": "Device @{items('For_each_Exposed')?['DeviceName']} is exposed to @{items('For_each_Exposed')?['CveId']} in @{items('For_each_Exposed')?['SoftwareName']} @{items('For_each_Exposed')?['SoftwareVersion']}, which has no EAC auto-update path. A ServiceNow ticket was opened. Patch via Win32/MECM or admin action." },
+                          "toRecipients": [ { "emailAddress": { "address": "@{parameters('NotificationEmail')}" } } ]
+                        } },
+                        "authentication": { "type": "ManagedServiceIdentity", "audience": "@parameters('GraphApiBase')" }
+                      }
+                    }
+                  } }
+                }
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {
+          "MdeApiBase": { "value": "[parameters('MdeApiBase')]" },
+          "GraphApiBase": { "value": "[parameters('GraphApiBase')]" },
+          "KevFeedUrl": { "value": "[parameters('KevFeedUrl')]" },
+          "SinceHours": { "value": "[parameters('SinceHours')]" },
+          "GroupPrefix": { "value": "[parameters('GroupPrefix')]" },
+          "EacApps": { "value": "[parameters('EacApps')]" },
+          "ServiceNowLogicAppUrl": { "value": "[parameters('ServiceNowLogicAppUrl')]" },
+          "NotificationSender": { "value": "[parameters('NotificationSender')]" },
+          "NotificationEmail": { "value": "[parameters('NotificationEmail')]" }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "managedIdentityPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Logic/workflows', parameters('PlaybookName')), '2019-05-01', 'Full').identity.principalId]"
+    }
+  }
+}

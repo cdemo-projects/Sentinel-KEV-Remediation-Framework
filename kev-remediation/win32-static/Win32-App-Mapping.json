@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "v3 schema. CVE -> Intune Win32 app mapping for KEV remediation framework. Read at runtime by the KEV-Remediate Logic App. Hosted in Azure Storage container kev-config; Logic App MI has Storage Blob Data Reader.",
+  "version": 3,
+  "lastUpdated": "2026-05-04",
+  "ringStrategy": {
+    "$comment": "Universal ring groups. Created once per tenant by Setup-KEVRingGroups.ps1. Same three groups serve every app. The Logic App intersects affected device list with these to decide who gets patched in which wave.",
+    "pilotGroupId": "<entra-group-id-for-pilot-ring>",
+    "earlyGroupId": "<entra-group-id-for-early-ring>",
+    "broadGroupId": "<entra-group-id-for-broad-ring>",
+    "defaultPilotToEarlyHours": 24,
+    "defaultEarlyToBroadHours": 48,
+    "defaultFailureThreshold": 0.10,
+    "$thresholdNote": "0.10 means halt promotion if more than 10% of the ring's affected devices fail to install within the wait window. NOT a Microsoft-recommended number; customer-tunable based on historical Win32 install failure rates."
+  },
+  "apps": [
+    {
+      "appKey": "7zip",
+      "intuneAppId": "<your-7zip-mobileapps-guid>",
+      "intuneAppDisplayName": "7-Zip 24.09 (x64 edition)",
+      "minRemediatedVersion": "24.09.00.0",
+      "intuneAppPatchGroupId": "<entra-group-id-for-AAD-KEV-AppPatch-7Zip>",
+      "$groupNote": "Group must be pre-created and the Intune app must be assigned to it with intent=required. Use Onboard-AppToFramework.ps1 to set this up.",
+      "softwareVendor": "igor_pavlov",
+      "softwareName": "7-zip",
+      "$matchingNote": "softwareVendor + softwareName must match exactly what MDETVM_CL.softwareVendor and MDETVM_CL.softwareName return. Verify with: MDETVM_CL | where cveId == '<CVE>' | distinct softwareVendor, softwareName",
+      "cveIds": [
+        "CVE-PLACEHOLDER-7ZIP-1",
+        "CVE-PLACEHOLDER-7ZIP-2"
+      ],
+      "$cveNote": "List of CVEs that this version of the app remediates. Logic App matches any incident CVE against this list. Add new CVE IDs as KEV publishes them and as the app version remediates them.",
+      "ringOverrides": null,
+      "$ringOverrideExample": {
+        "pilotToEarlyHours": 4,
+        "earlyToBroadHours": 12,
+        "failureThreshold": 0.05,
+        "$why": "Use ringOverrides for apps where the customer wants different velocity. Example: for KEV-active-exploitation cases the customer might want a tighter pilot window. null means use ringStrategy defaults."
+      },
+      "excludeFromAutomation": false,
+      "$excludeNote": "Set true for apps that require manual change board approval (e.g., license-gated, high-risk). Logic App will skip the push and fall through to notification-only path."
+    },
+    {
+      "appKey": "notepad-plus-plus",
+      "intuneAppId": "<your-notepadpp-mobileapps-guid>",
+      "intuneAppDisplayName": "Notepad++ 8.6.9 (x64)",
+      "minRemediatedVersion": "8.6.9",
+      "intuneAppPatchGroupId": "<entra-group-id-for-AAD-KEV-AppPatch-NotepadPP>",
+      "softwareVendor": "notepad-plus-plus",
+      "softwareName": "notepad__",
+      "cveIds": [],
+      "ringOverrides": null,
+      "excludeFromAutomation": false
+    },
+    {
+      "appKey": "chrome",
+      "intuneAppId": "<your-chrome-mobileapps-guid>",
+      "intuneAppDisplayName": "Google Chrome (Enterprise) 124.0.6367.119",
+      "minRemediatedVersion": "124.0.6367.119",
+      "intuneAppPatchGroupId": "<entra-group-id-for-AAD-KEV-AppPatch-Chrome>",
+      "softwareVendor": "google",
+      "softwareName": "chrome",
+      "cveIds": [],
+      "ringOverrides": null,
+      "excludeFromAutomation": false
+    }
+  ],
+  "cveIndex": {
+    "$comment": "Direct CVE-to-app lookup. Logic App uses this as primary lookup: cveIndex[cveFromIncidentTitle]. Faster than filtering the apps array and avoids Logic Apps Consumption filter() limitation. Must be kept in sync with apps[].cveIds entries. Key = CVE ID string, Value = full app config object.",
+    "CVE-PLACEHOLDER-7ZIP-1": {
+      "appKey": "7zip",
+      "intuneAppId": "<your-7zip-mobileapps-guid>",
+      "intuneAppDisplayName": "7-Zip 24.09 (x64 edition)",
+      "minRemediatedVersion": "24.09.00.0",
+      "intuneAppPatchGroupId": "<entra-group-id-for-AAD-KEV-AppPatch-7Zip>",
+      "softwareVendor": "igor_pavlov",
+      "softwareName": "7-zip",
+      "ringOverrides": null,
+      "excludeFromAutomation": false
+    },
+    "CVE-PLACEHOLDER-7ZIP-2": {
+      "appKey": "7zip",
+      "intuneAppId": "<your-7zip-mobileapps-guid>",
+      "intuneAppDisplayName": "7-Zip 24.09 (x64 edition)",
+      "minRemediatedVersion": "24.09.00.0",
+      "intuneAppPatchGroupId": "<entra-group-id-for-AAD-KEV-AppPatch-7Zip>",
+      "softwareVendor": "igor_pavlov",
+      "softwareName": "7-zip",
+      "ringOverrides": null,
+      "excludeFromAutomation": false
+    }
+  },
+  "lookupContract": {
+    "primaryKey": "cveIndex[cveFromIncidentTitle] — direct CVE key lookup; does not require TVM data",
+    "missMode": "If cveIndex has no entry for the incident CVE, outputs null and Logic App falls through to notification-only path (no auto-push).",
+    "excludeMode": "If a matching app has excludeFromAutomation=true, fall through to notification-only with a comment indicating the exclusion."
+  },
+  "schema": {
+    "ringStrategy.pilotGroupId": "GUID    - Entra group of devices designated as Pilot ring for KEV-driven patches",
+    "ringStrategy.earlyGroupId": "GUID    - Entra group of devices designated as Early ring",
+    "ringStrategy.broadGroupId": "GUID    - Entra group of devices designated as Broad ring (typically a dynamic group: 'all Windows devices not in Pilot or Early')",
+    "ringStrategy.defaultPilotToEarlyHours": "int  - Hours to wait between Pilot promotion and Early promotion",
+    "ringStrategy.defaultEarlyToBroadHours": "int  - Hours to wait between Early promotion and Broad promotion",
+    "ringStrategy.defaultFailureThreshold": "float - Halt promotion if affected_in_ring_failed / affected_in_ring_total exceeds this value",
+    "apps[].appKey": "string  - Stable id, used in logs and Storage table audit rows",
+    "apps[].intuneAppId": "GUID    - mobileApps id of the Intune app to assign",
+    "apps[].intuneAppPatchGroupId": "GUID    - Entra group with the standing assignment for this app (intent=required, pre-configured by admin)",
+    "apps[].softwareVendor": "string  - Lowercase vendor token, must match MDETVM_CL.softwareVendor",
+    "apps[].softwareName": "string  - Lowercase software token, must match MDETVM_CL.softwareName",
+    "apps[].cveIds": "string[] - List of CVEs that this app version remediates (KEV-listed or otherwise)",
+    "apps[].ringOverrides": "object | null - Per-app overrides for ring delays and failure threshold; null uses ringStrategy defaults",
+    "apps[].excludeFromAutomation": "boolean - true skips auto-push and falls through to notification"
+  }
+}

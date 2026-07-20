@@ -1,0 +1,45 @@
+# Secrets and credentials
+**/config.ps1
+*.pfx
+*.pem
+*.key
+
+# Temp files from Logic App patching
+kev-remediate-updated.json
+
+# Office temp/lock files
+~$*
+
+# Internal / not for GitHub
+4-customer-presentation/
+customer-presentation/
+.notes/
+_archive-remediation-poc/
+defender-hunting/
+conversations/
+
+# Raw Logic App exports (contain real tenant/subscription/group/Teams IDs)
+KEV-Remediate-backup-*.json
+KEV-Remediate-planned-*.json
+
+# POC logs
+_archive-remediation-poc/logs/
+
+# OS files
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Editor state
+.vscode/
+*.code-workspace
+
+# Diagnostic / debug
+_diag.py
+_scan.ps1
+_*.ps1
+_*.json
+_*.txt
+out.json
+*.output.txt
+query*_output.txt
