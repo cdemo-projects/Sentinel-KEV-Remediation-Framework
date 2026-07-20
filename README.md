@@ -25,13 +25,14 @@ Microsoft Sentinel workbooks in the Defender portal can use **Advanced hunting**
 | Freshness | Current Defender state at query time | Daily snapshot after scheduled ingestion completes |
 | Standalone comparison | [`CISA-KEV-Native-Comparison.kql`](sentinel-workbooks/CISA-KEV-Native-Comparison.kql) in Defender Advanced Hunting | [`CISA-KEV-MDVM-Correlation.kql`](sentinel-analytics/CISA-KEV-MDVM-Correlation.kql) in Sentinel Logs |
 | Workbook | [`MDETVM-KEV-Workbook-Native.json`](sentinel-workbooks/MDETVM-KEV-Workbook-Native.json) | [`MDETVM-KEV-Workbook.json`](sentinel-workbooks/MDETVM-KEV-Workbook.json) |
+| CISA comparison query shape | CISA feed + `DeviceTvmSoftwareVulnerabilities`; one broadcast join with the smaller CISA set on the left | CISA feed joined to the flattened `MDETVM_CL` snapshot |
 | Sentinel scheduled analytics and existing SOAR workflow | Native TVM data isn't placed in the Sentinel workspace; use the custom path for this project's existing rules and playbooks | Supported by the existing analytics, incident, and remediation components |
 | Historical snapshots controlled by Sentinel retention | No daily snapshots created by this project | Yes; snapshots remain according to the workspace table retention policy |
 | Best fit | Current-state visibility, investigation, dashboards, and ad hoc comparison | Detection, incident creation, automation, and retained snapshot analysis |
 
 The paths are complementary. Choose the native path for current visibility and reporting. Choose the custom path when downstream Sentinel analytics or the remediation workflow must query the findings from Log Analytics.
 
-Microsoft references: [July 2026 Defender XDR update announcing the GA Advanced Hunting workbook connector](https://techcommunity.microsoft.com/blog/microsoftthreatprotectionblog/monthly-news---july-2026/4532402) and [Sentinel documentation describing TVM table ingestion limitations](https://learn.microsoft.com/azure/sentinel/connect-microsoft-365-defender#which-defender-xdr-tables-arent-supported-in-microsoft-sentinel).
+Microsoft references: [July 2026 Defender XDR update announcing the GA Advanced Hunting workbook connector](https://techcommunity.microsoft.com/blog/microsoftthreatprotectionblog/monthly-news---july-2026/4532402), [Advanced Hunting join optimization guidance](https://learn.microsoft.com/defender-xdr/advanced-hunting-best-practices#optimize-the-join-operator), and [Sentinel documentation describing TVM table ingestion limitations](https://learn.microsoft.com/azure/sentinel/connect-microsoft-365-defender#which-defender-xdr-tables-arent-supported-in-microsoft-sentinel).
 
 ---
 
@@ -105,9 +106,11 @@ Sentinel-KEV-Remediation-Framework/
 
 ### Option 1 — Native Workbook and Comparison (No Custom Table)
 
-Open [`sentinel-workbooks/CISA-KEV-Native-Comparison.kql`](sentinel-workbooks/CISA-KEV-Native-Comparison.kql), paste it into **Microsoft Defender portal → Hunting → Advanced hunting**, and run it. The results show the direct comparison between current native MDVM findings and the live CISA KEV catalog, including affected devices, CVSS score, exploit availability, ransomware association, and CISA remediation due dates.
+Open [`sentinel-workbooks/CISA-KEV-Native-Comparison.kql`](sentinel-workbooks/CISA-KEV-Native-Comparison.kql), paste it into **Microsoft Defender portal → Hunting → Advanced hunting**, and run it. The results show the direct comparison between current native MDVM findings and the live CISA KEV catalog, including affected devices, severity, ransomware association, update guidance, and CISA remediation due dates.
 
 The matching importable workbook is [`sentinel-workbooks/MDETVM-KEV-Workbook-Native.json`](sentinel-workbooks/MDETVM-KEV-Workbook-Native.json). It uses the **Advanced hunting** workbook data source and does not depend on `MDETVM_CL`.
+
+To keep each Advanced Hunting request within two sources, CISA comparison panels don't join `DeviceTvmSoftwareVulnerabilitiesKB`. The workbook's **All CVEs** detail view queries `DeviceTvmSoftwareVulnerabilities` + `DeviceTvmSoftwareVulnerabilitiesKB` separately and retains CVSS and public-exploit metadata.
 
 ### Option 2 — Custom-Table Workbook (Persistence and Automation Foundation)
 

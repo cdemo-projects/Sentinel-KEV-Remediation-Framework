@@ -10,9 +10,12 @@
 //   Microsoft Defender portal > Hunting > Advanced hunting
 //   https://security.microsoft.com/v2/advanced-hunting
 //
-// Native tables:
+// Native table:
 //   DeviceTvmSoftwareVulnerabilities
-//   DeviceTvmSoftwareVulnerabilitiesKB
+//
+// The comparison intentionally uses two sources only: the CISA feed and the
+// native findings table. CVSS and public-exploit metadata from the TVM KB table
+// are omitted here to avoid a three-source join in Advanced Hunting.
 //
 // Drafting assistance: Claude Opus 4.8 (via GitHub Copilot), grounded in
 // official Microsoft Learn documentation and the live CISA KEV catalog.
@@ -33,23 +36,46 @@ let CISA_KEV = externaldata(
 )
 [@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
 with (format="csv", ignoreFirstRecord=true);
-let VulnerabilityKnowledgeBase =
-    DeviceTvmSoftwareVulnerabilitiesKB
-    | summarize arg_max(LastModifiedTime, *) by CveId
+CISA_KEV
+| project
+    CveId = cveID,
+    vendorProject,
+    product,
+    vulnerabilityName,
+    shortDescription,
+    requiredAction,
+    dateAdded,
+    dueDate,
+    knownRansomwareCampaignUse,
+    cwes
+| join kind=inner hint.strategy=broadcast (
+    DeviceTvmSoftwareVulnerabilities
+    | where isnotempty(CveId) and isnotempty(DeviceId)
     | project
+        DeviceName,
+        DeviceId,
+        OSPlatform,
+        OSVersion,
         CveId,
-        CvssScore = todouble(CvssScore),
-        IsExploitAvailable,
-        PublishedDate,
-        VulnerabilityDescription;
-DeviceTvmSoftwareVulnerabilities
-| where isnotempty(CveId) and isnotempty(DeviceId)
-| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID
-| join kind=leftouter (VulnerabilityKnowledgeBase) on CveId
+        VulnerabilitySeverityLevel,
+        CveTags,
+        SoftwareVendor,
+        SoftwareName,
+        SoftwareVersion,
+        RecommendedSecurityUpdate,
+        RecommendedSecurityUpdateId
+) on CveId
 | extend
     IsOverdue = dueDate < now(),
     DaysUntilDue = datetime_diff("day", dueDate, now()),
     IsRansomwareLinked = knownRansomwareCampaignUse != "Unknown",
+    SeverityRank = case(
+        VulnerabilitySeverityLevel == "Critical", 4,
+        VulnerabilitySeverityLevel == "High", 3,
+        VulnerabilitySeverityLevel == "Medium", 2,
+        VulnerabilitySeverityLevel == "Low", 1,
+        0
+    ),
     SecurityUpdateAvailable =
         isnotempty(RecommendedSecurityUpdateId)
         or isnotempty(RecommendedSecurityUpdate)
@@ -60,8 +86,6 @@ DeviceTvmSoftwareVulnerabilities
     OSVersion,
     CveId,
     VulnerabilitySeverityLevel,
-    CvssScore,
-    IsExploitAvailable,
     CveTags,
     SoftwareVendor,
     SoftwareName,
@@ -84,6 +108,6 @@ DeviceTvmSoftwareVulnerabilities
 | order by
     IsRansomwareLinked desc,
     IsOverdue desc,
-    CvssScore desc,
+    SeverityRank desc,
     dueDate asc,
     DeviceName asc

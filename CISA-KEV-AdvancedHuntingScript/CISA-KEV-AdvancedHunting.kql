@@ -9,7 +9,11 @@
 //
 // TABLES:
 //   DeviceTvmSoftwareVulnerabilities — CVEs detected on devices (native to MDE)
-//   DeviceTvmSoftwareVulnerabilitiesKB — CVE knowledge base metadata
+//
+// NOTE:
+//   CISA comparisons intentionally use two sources only: the CISA feed and the
+//   native findings table. Query the TVM KB table separately when CVSS metadata
+//   is required; adding it here creates a three-source Advanced Hunting query.
 //
 // USAGE:
 //   Paste into Defender XDR > Hunting > Advanced Hunting
@@ -39,21 +43,48 @@ let CISA_KEV = externaldata(
     requiredAction: string,
     dueDate: datetime,
     knownRansomwareCampaignUse: string,
-    notes: string
+    notes: string,
+    cwes: string
 )
 [@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
 with (format="csv", ignoreFirstRecord=true);
 let NewKEVs = CISA_KEV
     | where dateAdded >= ago(NewKEVThreshold);
-DeviceTvmSoftwareVulnerabilities
-| join kind=inner (NewKEVs) on $left.CveId == $right.cveID
-| join kind=leftouter (
-    DeviceTvmSoftwareVulnerabilitiesKB
-    | project CveId, CvssScore, IsExploitAvailable, VulnerabilitySeverityLevel
+NewKEVs
+| project
+    CveId = cveID,
+    vendorProject,
+    product,
+    vulnerabilityName,
+    shortDescription,
+    requiredAction,
+    dateAdded,
+    dueDate,
+    knownRansomwareCampaignUse
+| join kind=inner hint.strategy=broadcast (
+    DeviceTvmSoftwareVulnerabilities
+    | project
+        DeviceName,
+        DeviceId,
+        CveId,
+        OSPlatform,
+        OSVersion,
+        SoftwareName,
+        SoftwareVendor,
+        SoftwareVersion,
+        VulnerabilitySeverityLevel,
+        RecommendedSecurityUpdate,
+        RecommendedSecurityUpdateId
 ) on CveId
 | extend DueDateInDays = datetime_diff('day', dueDate, now())
 | extend IsOverdue = dueDate < now()
 | extend IsRansomware = knownRansomwareCampaignUse != "Unknown"
+| extend SeverityRank = case(
+    VulnerabilitySeverityLevel == "Critical", 4,
+    VulnerabilitySeverityLevel == "High", 3,
+    VulnerabilitySeverityLevel == "Medium", 2,
+    VulnerabilitySeverityLevel == "Low", 1,
+    0)
 | project
     DeviceName,
     DeviceId,
@@ -64,8 +95,6 @@ DeviceTvmSoftwareVulnerabilities
     SoftwareVendor,
     SoftwareVersion,
     VulnerabilitySeverityLevel,
-    CvssScore,
-    IsExploitAvailable,
     RecommendedSecurityUpdate,
     RecommendedSecurityUpdateId,
     // CISA KEV fields
@@ -79,8 +108,10 @@ DeviceTvmSoftwareVulnerabilities
     DueDateInDays,
     IsOverdue,
     IsRansomware,
-    knownRansomwareCampaignUse
-| sort by IsRansomware desc, CvssScore desc, DueDateInDays asc
+    knownRansomwareCampaignUse,
+    SeverityRank
+| sort by IsRansomware desc, SeverityRank desc, DueDateInDays asc
+| project-away SeverityRank
 
 
 // =============================================================================
@@ -99,15 +130,16 @@ let CISA_KEV = externaldata(
     requiredAction: string,
     dueDate: datetime,
     knownRansomwareCampaignUse: string,
-    notes: string
+    notes: string,
+    cwes: string
 )
 [@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
 with (format="csv", ignoreFirstRecord=true);
-DeviceTvmSoftwareVulnerabilities
-| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID
-| join kind=leftouter (
-    DeviceTvmSoftwareVulnerabilitiesKB
-    | project CveId, CvssScore, IsExploitAvailable, VulnerabilitySeverityLevel
+CISA_KEV
+| project CveId=cveID, vulnerabilityName, vendorProject, product, requiredAction, dateAdded, dueDate, knownRansomwareCampaignUse
+| join kind=inner hint.strategy=broadcast (
+    DeviceTvmSoftwareVulnerabilities
+    | project DeviceName, CveId, VulnerabilitySeverityLevel
 ) on CveId
 | extend DueDateInDays = datetime_diff('day', dueDate, now())
 | extend IsOverdue = dueDate < now()
@@ -120,15 +152,13 @@ DeviceTvmSoftwareVulnerabilities
        vendorProject,
        product,
        VulnerabilitySeverityLevel,
-       CvssScore,
-       IsExploitAvailable,
        requiredAction,
        dateAdded,
        dueDate,
        DueDateInDays,
        IsOverdue,
        IsRansomware
-| sort by IsRansomware desc, IsOverdue desc, CvssScore desc, DeviceCount desc
+| sort by IsRansomware desc, IsOverdue desc, DeviceCount desc
 */
 
 
@@ -147,15 +177,16 @@ let CISA_KEV = externaldata(
     requiredAction: string,
     dueDate: datetime,
     knownRansomwareCampaignUse: string,
-    notes: string
+    notes: string,
+    cwes: string
 )
 [@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
 with (format="csv", ignoreFirstRecord=true);
-DeviceTvmSoftwareVulnerabilities
-| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID
-| join kind=leftouter (
-    DeviceTvmSoftwareVulnerabilitiesKB
-    | project CveId, CvssScore, IsExploitAvailable
+CISA_KEV
+| project CveId=cveID, dueDate, knownRansomwareCampaignUse
+| join kind=inner hint.strategy=broadcast (
+    DeviceTvmSoftwareVulnerabilities
+    | project DeviceName, CveId
 ) on CveId
 | extend IsOverdue = dueDate < now()
 | extend IsRansomware = knownRansomwareCampaignUse != "Unknown"
@@ -166,8 +197,6 @@ DeviceTvmSoftwareVulnerabilities
     OverdueFindings = countif(IsOverdue),
     RansomwareLinkedKEVs = dcountif(CveId, IsRansomware),
     RansomwareAffectedDevices = dcountif(DeviceName, IsRansomware),
-    AvgCvssScore = round(avg(CvssScore), 1),
-    MaxCvssScore = max(CvssScore),
     OldestDueDatePast = min(iff(IsOverdue, dueDate, datetime(null))),
     NextDueDate = min(iff(not(IsOverdue), dueDate, datetime(null)))
 */
@@ -188,15 +217,16 @@ let CISA_KEV = externaldata(
     requiredAction: string,
     dueDate: datetime,
     knownRansomwareCampaignUse: string,
-    notes: string
+    notes: string,
+    cwes: string
 )
 [@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
 with (format="csv", ignoreFirstRecord=true);
-DeviceTvmSoftwareVulnerabilities
-| join kind=inner (CISA_KEV) on $left.CveId == $right.cveID
-| join kind=leftouter (
-    DeviceTvmSoftwareVulnerabilitiesKB
-    | project CveId, CvssScore, IsExploitAvailable
+CISA_KEV
+| project CveId=cveID, dueDate, knownRansomwareCampaignUse
+| join kind=inner hint.strategy=broadcast (
+    DeviceTvmSoftwareVulnerabilities
+    | project DeviceName, DeviceId, CveId, OSPlatform, OSVersion
 ) on CveId
 | extend IsOverdue = dueDate < now()
 | extend IsRansomware = knownRansomwareCampaignUse != "Unknown"
@@ -204,9 +234,8 @@ DeviceTvmSoftwareVulnerabilities
     KEVCount = dcount(CveId),
     OverdueCount = dcountif(CveId, IsOverdue),
     RansomwareCount = dcountif(CveId, IsRansomware),
-    MaxCvss = max(CvssScore),
     KEVList = make_set(CveId, 20)
-    by DeviceName, DeviceId, OsDistribution, OsVersion
+    by DeviceName, DeviceId, OSPlatform, OSVersion
 | sort by KEVCount desc
 | take 50
 */
