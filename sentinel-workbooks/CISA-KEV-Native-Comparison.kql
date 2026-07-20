@@ -104,10 +104,12 @@ CISA_KEV
     IsOverdue,
     IsRansomwareLinked,
     knownRansomwareCampaignUse,
-    cwes
+    cwes,
+    SeverityRank
 | order by
     IsRansomwareLinked desc,
     IsOverdue desc,
     SeverityRank desc,
     dueDate asc,
     DeviceName asc
+| project-away SeverityRank
