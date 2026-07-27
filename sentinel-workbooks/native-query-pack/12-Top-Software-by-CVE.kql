@@ -1,0 +1,15 @@
+// Recreates the workbook Top 20 Software by CVE Count table.
+// Drafting assistance: Claude Opus 4.8 (via GitHub Copilot), grounded in official Microsoft Learn documentation.
+
+DeviceTvmSoftwareVulnerabilities
+| summarize
+    CVECount = dcount(CveId),
+    Devices = dcount(DeviceName)
+    by SoftwareName, SoftwareVendor
+| project
+    softwareName = SoftwareName,
+    softwareVendor = SoftwareVendor,
+    CVECount,
+    Devices
+| sort by CVECount desc
+| take 20

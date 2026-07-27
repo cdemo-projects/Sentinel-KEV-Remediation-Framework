@@ -1,0 +1,7 @@
+// Populates the workbook Device dropdown from current native TVM findings.
+// Drafting assistance: Claude Opus 4.8 (via GitHub Copilot), grounded in official Microsoft Learn documentation.
+
+DeviceTvmSoftwareVulnerabilities
+| where isnotempty(DeviceName)
+| distinct DeviceName
+| order by DeviceName asc

@@ -1,0 +1,9 @@
+// Recreates the workbook CVEs by Severity chart.
+// Drafting assistance: Claude Opus 4.8 (via GitHub Copilot), grounded in official Microsoft Learn documentation.
+
+DeviceTvmSoftwareVulnerabilities
+| summarize CVECount = dcount(CveId) by VulnerabilitySeverityLevel
+| project
+    vulnerabilitySeverityLevel = VulnerabilitySeverityLevel,
+    CVECount
+| sort by CVECount desc

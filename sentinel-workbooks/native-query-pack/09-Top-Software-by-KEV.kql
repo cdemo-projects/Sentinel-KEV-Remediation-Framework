@@ -1,0 +1,42 @@
+// Recreates the workbook Top 10 software products by KEV count chart.
+// Empty selection arrays include all values.
+// Drafting assistance: Claude Opus 4.8 (via GitHub Copilot), grounded in official Microsoft Learn documentation.
+
+let SelectedDevices = dynamic([]);
+let SelectedCveIds = dynamic([]);
+let SelectedVulnerabilityNames = dynamic([]);
+let SelectedVendors = dynamic([]);
+let SelectedProducts = dynamic([]);
+let CISA_KEV = externaldata(
+    cveID: string,
+    vendorProject: string,
+    product: string,
+    vulnerabilityName: string,
+    dateAdded: datetime,
+    shortDescription: string,
+    requiredAction: string,
+    dueDate: datetime,
+    knownRansomwareCampaignUse: string,
+    notes: string,
+    cwes: string
+)
+[@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
+with (format="csv", ignoreFirstRecord=true);
+CISA_KEV
+| where array_length(SelectedVulnerabilityNames) == 0
+    or set_has_element(SelectedVulnerabilityNames, vulnerabilityName)
+| where array_length(SelectedVendors) == 0
+    or set_has_element(SelectedVendors, vendorProject)
+| where array_length(SelectedProducts) == 0
+    or set_has_element(SelectedProducts, product)
+| project CveId = cveID
+| join kind=inner hint.strategy=broadcast (
+    DeviceTvmSoftwareVulnerabilities
+    | where array_length(SelectedDevices) == 0
+        or set_has_element(SelectedDevices, DeviceName)
+    | where array_length(SelectedCveIds) == 0
+        or set_has_element(SelectedCveIds, CveId)
+    | project CveId, SoftwareName
+) on CveId
+| summarize Count = count() by Software = SoftwareName
+| top 10 by Count desc

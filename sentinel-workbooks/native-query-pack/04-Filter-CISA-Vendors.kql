@@ -1,0 +1,27 @@
+// Populates the CISA vendor dropdown with KEVs present in native TVM.
+// Drafting assistance: Claude Opus 4.8 (via GitHub Copilot), grounded in official Microsoft Learn documentation.
+
+let CISA_KEV = externaldata(
+    cveID: string,
+    vendorProject: string,
+    product: string,
+    vulnerabilityName: string,
+    dateAdded: datetime,
+    shortDescription: string,
+    requiredAction: string,
+    dueDate: datetime,
+    knownRansomwareCampaignUse: string,
+    notes: string,
+    cwes: string
+)
+[@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
+with (format="csv", ignoreFirstRecord=true);
+CISA_KEV
+| project CveId = cveID, VendorProject = vendorProject
+| join kind=inner hint.strategy=broadcast (
+    DeviceTvmSoftwareVulnerabilities
+    | where isnotempty(CveId)
+    | distinct CveId
+) on CveId
+| distinct VendorProject
+| order by VendorProject asc
